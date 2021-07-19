@@ -19,8 +19,9 @@ example：
 """
 import json
 import multiprocessing
-import time
 import os
+import time
+
 
 def is_beginning_of_word(token, tokenizer):
     i = tokenizer._convert_token_to_id(token)
@@ -28,22 +29,24 @@ def is_beginning_of_word(token, tokenizer):
         # special elements are always considered beginnings
         return True
     tok = token
-    if tok.startswith('madeupword'):
+    if tok.startswith("madeupword"):
         return True
     try:
-        return tokenizer.decode(i, clean_up_tokenization_spaces=False).startswith(' ')
+        return tokenizer.decode(i, clean_up_tokenization_spaces=False).startswith(" ")
     except ValueError:
         return True
+
 
 def cal_entity_start_index(is_start, start):
     count = 0  # the first world in is_start is always False.
     for index, i in enumerate(is_start):
-        if i :
+        if i:
             count += 1
         if count == start + 1:
             break
     result = index + 1  # for the <s> token.
     return result
+
 
 def cal_entity_end_index(is_start, end):
     count = 0
@@ -54,6 +57,7 @@ def cal_entity_end_index(is_start, end):
             break
     result = index - 1 + 1  # -1 if for finding the last word, +1 is for <s>
     return result
+
 
 def func(file):
     print(file)
@@ -69,7 +73,7 @@ def func(file):
             sentences_boundaries = ele["sentences_boundaries"]
             word_boundaries = ele["words_boundaries"]
             for tri in triples:
-                sent_bound = sentences_boundaries[tri['sentence_id']]
+                sent_bound = sentences_boundaries[tri["sentence_id"]]
                 entity1_index = tri["subject"]["boundaries"]
                 entity1_uri = tri["subject"]["uri"]
                 entity2_index = tri["object"]["boundaries"]
@@ -84,9 +88,9 @@ def func(file):
                     word_index = []
                     for word_bound in word_boundaries:
                         if word_bound[0] >= sent_bound[0] and word_bound[1] <= sent_bound[1]:
-                            sentence.append(text[word_bound[0]: word_bound[1]])
+                            sentence.append(text[word_bound[0] : word_bound[1]])
                             word_index_in_sentence.append(word_bound)
-                            word_index.append([word_bound[0]-sent_bound[0],word_bound[1]-sent_bound[0]])
+                            word_index.append([word_bound[0] - sent_bound[0], word_bound[1] - sent_bound[0]])
                     count = 0
                     for j, word_bound in enumerate(word_index_in_sentence):
                         if word_bound[0] == entity1_index[0]:
@@ -104,35 +108,36 @@ def func(file):
                     if count != 4:
                         char_index_2_token_index_errors_counts += 1
                         continue  # drop
-                    example= {}
-                    example['docid'] = ele['docid'].split("/")[-1]
-                    example['token'] = sentence
-                    example['relation'] = predicate
-                    example['subj_start'] = entity1_index[0]
-                    example['subj_end'] = entity1_index[1]
-                    example['obj_start'] = entity2_index[0]
-                    example['obj_end'] = entity2_index[1]
-                    example['subj_label'] = entity1_label
-                    example['obj_label'] = entity2_label
+                    example = {}
+                    example["docid"] = ele["docid"].split("/")[-1]
+                    example["token"] = sentence
+                    example["relation"] = predicate
+                    example["subj_start"] = entity1_index[0]
+                    example["subj_end"] = entity1_index[1]
+                    example["obj_start"] = entity2_index[0]
+                    example["obj_end"] = entity2_index[1]
+                    example["subj_label"] = entity1_label
+                    example["obj_label"] = entity2_label
                     examples.append(example)
                 else:
                     pass
     return [examples]
 
+
 if __name__ == "__main__":
     start_time = time.time()
     pool = multiprocessing.Pool(processes=os.cpu_count())
-    data_path = "data/TREx/re-nlg_data" # the path of raw T_Rex dataset
+    data_path = "data/TREx/re-nlg_data"  # the path of raw T_Rex dataset
     file_list = os.listdir(data_path)
 
     results = []
     for file in file_list:
-        results.append(pool.apply_async(func, (os.path.join(data_path,file),)))
+        results.append(pool.apply_async(func, (os.path.join(data_path, file),)))
 
     pool.close()
     pool.join()
 
-    print('cost time: ', time.time()-start_time)
+    print("cost time: ", time.time() - start_time)
 
     examples = []
     skip_examples = []
@@ -145,7 +150,7 @@ if __name__ == "__main__":
             examples += example
         except BaseException as e:
             print("Error found in res.get()!")
-            wrong_res_count +=1
+            wrong_res_count += 1
             print(res)
 
     # predicate->id
@@ -163,11 +168,11 @@ if __name__ == "__main__":
     print("wrong_res_count: ", wrong_res_count)
 
     # Saving
-    save_path = "./data/cleaned_T_REx"
+    save_path = "data/cleaned_T_REx"
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    with open(os.path.join(save_path,"T_REx_pred2ic.json"), "w") as fout_pred2id:
+    with open(os.path.join(save_path, "T_REx_pred2ic.json"), "w") as fout_pred2id:
         json.dump(pred2id, fout_pred2id)
     with open(os.path.join(save_path, "T_REx_example.json"), "w") as fout_ex:
         json.dump(examples, fout_ex)
