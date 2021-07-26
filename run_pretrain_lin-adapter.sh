@@ -4,7 +4,7 @@
 
 task=find_head
 GPU='0,1,2,3'
-CUDA_VISIBLE_DEVICES=$GPU lin-adapter.py  \
+CUDA_VISIBLE_DEVICES=$GPU python lin-adapter.py  \
 --model_type roberta \
 --model_name=roberta-large  \
 --data_dir=./data/find_head  \
