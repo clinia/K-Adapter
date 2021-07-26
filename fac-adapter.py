@@ -865,7 +865,7 @@ def main():
 
         logger.info("Saving model checkpoint to %s", args.output_dir)
         model_to_save = (
-            model[0].module if hasattr(model, "module") else model[0]
+            model[1].module if hasattr(model, "module") else model[1]
         )  # Take care of distributed/parallel training
         model_to_save.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
