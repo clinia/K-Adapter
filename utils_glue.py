@@ -62,6 +62,15 @@ class InputFeatures(object):
         self.label_id = label_id
         self.start_id = start_id
 
+class mlmInputFeatures(object):
+    """A single set of features of data."""
+
+    def __init__(self, input_ids, input_mask, segment_ids, basic_mask, labels):
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.segment_ids = segment_ids
+        self.basic_mask = basic_mask
+        self.labels = labels
 
 class trex_rcInputFeatures(object):
     """A single set of features of data."""
@@ -151,6 +160,33 @@ class find_head_InputFeatures(object):
 
 
 import copy
+
+
+class MLMProcessor(DataProcessor):
+    def get_train_examples(self, data_dir, dataset_type=None):
+        """See base class."""
+        return self._create_examples(self._read_json(os.path.join(data_dir, "train.json")), "train", data_dir)
+
+    def get_dev_examples(self, data_dir, dataset_type):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, data_dir
+        )
+
+    def get_labels(self):
+        """See base class."""
+        return
+
+    def _create_examples(self, lines, set_type, data_dir):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = i
+            text_a = line["token"]
+            label = line["label"]
+
+            examples.append(InputExample(guid=guid, text_a=text_a, label=label)
+        return examples
 
 
 class FindHeadProcessor(DataProcessor):
@@ -339,6 +375,124 @@ relations = [
     "org:city_of_headquarters",
     "per:spouse",
 ]
+
+
+
+def convert_examples_to_features_entity_mlm(
+    examples,
+    label_list,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+    """
+    features = []
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d of %d" % (ex_index, len(examples)))
+
+        tokens = example.text_a
+        tags = example.label 
+        entities_pos = _get_entity_position(tags)
+
+
+        segment_ids = [sequence_a_segment_id] * len(tokens)
+        
+        tokenization = tokenizer(tokens, is_split_into_words = True, padding = "max_length",return_tensors = "pt", max_length= max_seq_length)
+
+
+        word_ids = tokenization.word_ids()
+
+        word_ids = torch.tensor([word_id if word_id is not None else -1 for word_id in word_ids])
+        input_ids = inputs["input_ids"].squeeze()
+        labels = input_ids.copy()
+        attention_mask = inputs["attention_mask"].squeeze()
+
+        # for this first version, we will only use masks, just like in https://arxiv.org/abs/1905.07129
+        # we could also try to swap some entities with random ones, to make our model learn how to disentangle all that.
+        basic_mask = torch.rand(input_ids.size()) < 0.15 # basic mask for MLM. Could play with this value
+
+        # TODO: find a fully vectorized solution for this? Idk if this is possible.
+        entity_masks = []
+        for pos in entities_pos:
+            tmp1 = word_ids >= pos[0]
+            #print(tmp1)
+            tmp2 = word_ids <= pos[1]
+            #print(tmp2)
+            ent_mask = torch.logical_and(tmp1, tmp2) # boolean tensor for the entity
+            #print(tmp)
+            # entity_masks.append(ent_mask)
+            if torch.logical_and(basic_mask, ent_mask).any():
+                # if any token from the entity is chosen, mask the whole entity
+                basic_mask[ent_mask] = True
+            entity_masks.append(ent_mask)
+        entity_masks = sum(entity_masks)
+
+        input_ids[basic_mask] = tokenizer.mask_token_id # masking all picked tokens
+
+
+        assert len(input_ids) == max_seq_length
+        assert len(attention_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+
+        if ex_index < 5:
+            logger.info("*** Example ***")
+            logger.info("guid: %s" % (example.guid))
+            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            logger.info("input_mask: %s" % " ".join([str(x) for x in attention_mask]))
+            logger.info("input_mask: %s" % " ".join([str(x) for x in basic_mask]))
+            logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            logger.info("labels: %s" % " ".join([str(x) for x in labels]))
+        features.append(
+            mlmInputFeatures(
+                input_ids=input_ids.tolist(),
+                input_mask=input_mask.tolist(),
+                segment_ids=segment_ids.tolist(), 
+                basic_mask = basic_mask.tolist(), 
+                labels = labels.tolist(),
+            )
+        )
+    return features
+
+def _get_entity_pos(tags):
+    entities_pos = []
+    cont = 0
+    i_max = len(tags)
+    for i,tag in enumerate(tags):
+        if tag !="O" and cont == 0:
+            index = i # remember the
+            if i == (i_max -1):
+                # case where entity is one word long and at the end
+                entities_pos.append((index, index + cont))
+            cont+=1
+        elif cont !=0 and tag !="O" and i != (i_max-1):
+            # continuing an entity case
+            cont+=1
+        elif cont !=0 and tag == "O":
+            # standard case
+            entities_pos.append((index, index + cont -1))
+            cont = 0
+        elif cont!=0 and i == (i_max-1):
+            # case where entity is more than one word long and at the end
+            entities_pos.append((index, index + cont))
+    return entities_pos
 
 
 def convert_examples_to_features_entity_typing(
@@ -1294,9 +1448,10 @@ processors = {
     "trex": TREXProcessor,
     "trex_entity_typing": TREXProcessor_et,
     "find_head": FindHeadProcessor,
+    "mlm": MLMProcessor,
 }
 
-output_modes = {"trex": "classification", "trex_entity_typing": "classification", "find_head": "classification"}
+output_modes = {"trex": "classification", "trex_entity_typing": "classification", "find_head": "classification", "mlm":"classification"}
 
 GLUE_TASKS_NUM_LABELS = {
     "entity_type": 9,
