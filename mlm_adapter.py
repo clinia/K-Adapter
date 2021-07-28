@@ -191,7 +191,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
                 "token_type_ids": batch[2]
                 if args.model_type in ["bert", "xlnet"]
                 else None,  # XLM and RoBERTa don't use segment_ids
-                "mlm_mask": batch[3]
+                "mlm_mask": batch[3],
                 "labels": batch[4],
             }
             pretrained_model_outputs = pretrained_model(**inputs)
@@ -315,9 +315,9 @@ def evaluate(args, val_dataset, model, tokenizer):
                 "attention_mask": batch[1],
                 "token_type_ids": batch[2] if args.model_type in ["bert", "xlnet"] else None,
                 # XLM and RoBERTa don't use segment_ids
-                "labels": batch[3],
+                "mlm_mask": batch[3],
+                "labels": batch[4],
             }
-            print(inputs)
             pretrained_model_outputs = pretrained_model(**inputs)
             outputs = adapter_model(pretrained_model_outputs, **inputs)
             tmp_eval_loss, logits, attention_prob = outputs[:3]
@@ -488,7 +488,6 @@ class AdapterModel(nn.Module):
         ### drop above parameters when doing downstream tasks
         self.com_dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
         self.dense = nn.Linear(self.config.hidden_size, self.config.hidden_size)
-        self.out_proj = nn.Linear(self.config.hidden_size, self.config.vocab_size)
 
     def forward(
         self,
@@ -525,14 +524,16 @@ class AdapterModel(nn.Module):
         com_features = self.com_dense(torch.cat([sequence_output, hidden_states_last], dim=2))
 
         out = self.dense(com_features)
-        logits = torch.bmm(out, self.args.embeddings.weight.T)  # NOTE: we do this to focus the pretraining on the core of the adapter and not on superfluous head paremeters
+        logits = torch.bmm(
+            out, self.args.embeddings.T
+        )  # NOTE: we do this to focus the pretraining on the core of the adapter and not on superfluous head paremeters
 
         if labels is not None:
             # Only keep active parts of the loss
             loss_fct = CrossEntropyLoss()
             if attention_mask is not None:
                 active_part = attention_mask.view(-1) == 1
-                active_part = torch.logical_and(mlm_mask, active_part) #only compute the loss over masked tokens
+                active_part = torch.logical_and(mlm_mask, active_part)  # only compute the loss over masked tokens
                 active_predicts = logits.squeeze().view(-1, self.args.max_seq_length)[active_part]
                 active_labels = labels.view(-1)[active_part]
                 loss = loss_fct(active_predicts, active_labels)
@@ -615,7 +616,7 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
     all_labels_ids = torch.tensor([f.labels for f in features], dtype=torch.long)
     all_basic_masks = torch.tensor([f.basic_mask for f in features], dtype=torch.long)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_basic_masks)
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_labels_ids, all_basic_masks)
     return dataset
 
 
@@ -817,7 +818,9 @@ def main():
     config = RobertaConfig.from_pretrained("roberta-large", output_attentions=True)
 
     pretrained_model = PretrainedModel()
-    args.embeddings = pretrained_model.model.embeddings.word_embeddings
+    args.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size).from_pretrained(
+        pretrained_model.embeddings.word_embeddings.weight, freeze=True
+    )
     adapter_model = AdapterModel(args, pretrained_model.config)
 
     if args.local_rank == 0:

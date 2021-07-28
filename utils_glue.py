@@ -19,6 +19,7 @@
 
 from __future__ import absolute_import, division, print_function
 
+import copy
 import csv
 import json
 import logging
@@ -62,6 +63,7 @@ class InputFeatures(object):
         self.label_id = label_id
         self.start_id = start_id
 
+
 class mlmInputFeatures(object):
     """A single set of features of data."""
 
@@ -71,6 +73,7 @@ class mlmInputFeatures(object):
         self.segment_ids = segment_ids
         self.basic_mask = basic_mask
         self.labels = labels
+
 
 class trex_rcInputFeatures(object):
     """A single set of features of data."""
@@ -159,9 +162,6 @@ class find_head_InputFeatures(object):
         # self.indexes = indexes
 
 
-import copy
-
-
 class MLMProcessor(DataProcessor):
     def get_train_examples(self, data_dir, dataset_type=None):
         """See base class."""
@@ -185,7 +185,7 @@ class MLMProcessor(DataProcessor):
             text_a = line["token"]
             label = line["label"]
 
-            examples.append(InputExample(guid=guid, text_a=text_a, label=label)
+            examples.append(InputExample(guid=guid, text_a=text_a, label=label))
         return examples
 
 
@@ -377,7 +377,6 @@ relations = [
 ]
 
 
-
 def convert_examples_to_features_entity_mlm(
     examples,
     label_list,
@@ -408,14 +407,14 @@ def convert_examples_to_features_entity_mlm(
             logger.info("Writing example %d of %d" % (ex_index, len(examples)))
 
         tokens = example.text_a
-        tags = example.label 
+        tags = example.label
         entities_pos = _get_entity_position(tags)
 
-
         segment_ids = [sequence_a_segment_id] * len(tokens)
-        
-        tokenization = tokenizer(tokens, is_split_into_words = True, padding = "max_length",return_tensors = "pt", max_length= max_seq_length)
 
+        tokenization = tokenizer(
+            tokens, is_split_into_words=True, padding="max_length", return_tensors="pt", max_length=max_seq_length
+        )
 
         word_ids = tokenization.word_ids()
 
@@ -426,17 +425,17 @@ def convert_examples_to_features_entity_mlm(
 
         # for this first version, we will only use masks, just like in https://arxiv.org/abs/1905.07129
         # we could also try to swap some entities with random ones, to make our model learn how to disentangle all that.
-        basic_mask = torch.rand(input_ids.size()) < 0.15 # basic mask for MLM. Could play with this value
+        basic_mask = torch.rand(input_ids.size()) < 0.15  # basic mask for MLM. Could play with this value
 
         # TODO: find a fully vectorized solution for this? Idk if this is possible.
         entity_masks = []
         for pos in entities_pos:
             tmp1 = word_ids >= pos[0]
-            #print(tmp1)
+            # print(tmp1)
             tmp2 = word_ids <= pos[1]
-            #print(tmp2)
-            ent_mask = torch.logical_and(tmp1, tmp2) # boolean tensor for the entity
-            #print(tmp)
+            # print(tmp2)
+            ent_mask = torch.logical_and(tmp1, tmp2)  # boolean tensor for the entity
+            # print(tmp)
             # entity_masks.append(ent_mask)
             if torch.logical_and(basic_mask, ent_mask).any():
                 # if any token from the entity is chosen, mask the whole entity
@@ -444,8 +443,7 @@ def convert_examples_to_features_entity_mlm(
             entity_masks.append(ent_mask)
         entity_masks = sum(entity_masks)
 
-        input_ids[basic_mask] = tokenizer.mask_token_id # masking all picked tokens
-
+        input_ids[basic_mask] = tokenizer.mask_token_id  # masking all picked tokens
 
         assert len(input_ids) == max_seq_length
         assert len(attention_mask) == max_seq_length
@@ -464,32 +462,33 @@ def convert_examples_to_features_entity_mlm(
             mlmInputFeatures(
                 input_ids=input_ids.tolist(),
                 input_mask=input_mask.tolist(),
-                segment_ids=segment_ids.tolist(), 
-                basic_mask = basic_mask.tolist(), 
-                labels = labels.tolist(),
+                segment_ids=segment_ids.tolist(),
+                basic_mask=basic_mask.tolist(),
+                labels=labels.tolist(),
             )
         )
     return features
+
 
 def _get_entity_pos(tags):
     entities_pos = []
     cont = 0
     i_max = len(tags)
-    for i,tag in enumerate(tags):
-        if tag !="O" and cont == 0:
-            index = i # remember the
-            if i == (i_max -1):
+    for i, tag in enumerate(tags):
+        if tag != "O" and cont == 0:
+            index = i  # remember the
+            if i == (i_max - 1):
                 # case where entity is one word long and at the end
                 entities_pos.append((index, index + cont))
-            cont+=1
-        elif cont !=0 and tag !="O" and i != (i_max-1):
+            cont += 1
+        elif cont != 0 and tag != "O" and i != (i_max - 1):
             # continuing an entity case
-            cont+=1
-        elif cont !=0 and tag == "O":
+            cont += 1
+        elif cont != 0 and tag == "O":
             # standard case
-            entities_pos.append((index, index + cont -1))
+            entities_pos.append((index, index + cont - 1))
             cont = 0
-        elif cont!=0 and i == (i_max-1):
+        elif cont != 0 and i == (i_max - 1):
             # case where entity is more than one word long and at the end
             entities_pos.append((index, index + cont))
     return entities_pos
@@ -520,7 +519,6 @@ def convert_examples_to_features_entity_typing(
     `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
     """
 
-    label_map = {label: i for i, label in enumerate(label_list)}
     features = []
     for (ex_index, example) in enumerate(examples):
         if ex_index % 10000 == 0:
@@ -1451,7 +1449,12 @@ processors = {
     "mlm": MLMProcessor,
 }
 
-output_modes = {"trex": "classification", "trex_entity_typing": "classification", "find_head": "classification", "mlm":"classification"}
+output_modes = {
+    "trex": "classification",
+    "trex_entity_typing": "classification",
+    "find_head": "classification",
+    "mlm": "classification",
+}
 
 GLUE_TASKS_NUM_LABELS = {
     "entity_type": 9,
