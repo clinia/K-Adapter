@@ -7,9 +7,9 @@ GPU='0,1,2,3'
 CUDA_VISIBLE_DEVICES=$GPU python mlm-adapter.py  \
 --model_type roberta \
 --model_name=roberta-large  \
---data_dir=./data/mlm  \
---output_dir mlm \
---restore '' \
+--data_dir=./data/ner_data/mlm_data  \
+--output_dir mlm_ouptut \
+--restore 'yes' \
 --do_train  \
 --do_eval   \
 --evaluate_during_training True \
@@ -17,7 +17,7 @@ CUDA_VISIBLE_DEVICES=$GPU python mlm-adapter.py  \
 --comment 'mlm-adapter' \
 --per_gpu_train_batch_size=32   \
 --per_gpu_eval_batch_size=8   \
---num_train_epochs 10 \
+--num_train_epochs 2 \
 --max_seq_length 64 \
 --gradient_accumulation_steps 1 \
 --learning_rate 2e-5 \

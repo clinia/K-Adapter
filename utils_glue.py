@@ -28,6 +28,7 @@ import sys
 from io import open
 
 import numpy as np
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +68,9 @@ class InputFeatures(object):
 class mlmInputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, basic_mask, labels):
+    def __init__(self, input_ids, input_mask, basic_mask, labels):
         self.input_ids = input_ids
         self.input_mask = input_mask
-        self.segment_ids = segment_ids
         self.basic_mask = basic_mask
         self.labels = labels
 
@@ -379,10 +379,8 @@ relations = [
 
 def convert_examples_to_features_entity_mlm(
     examples,
-    label_list,
     max_seq_length,
     tokenizer,
-    output_mode,
     cls_token_at_end=False,
     cls_token="[CLS]",
     cls_token_segment_id=1,
@@ -408,20 +406,23 @@ def convert_examples_to_features_entity_mlm(
 
         tokens = example.text_a
         tags = example.label
-        entities_pos = _get_entity_position(tags)
-
-        segment_ids = [sequence_a_segment_id] * len(tokens)
-
+        entities_pos = _get_entity_pos(tags)
         tokenization = tokenizer(
-            tokens, is_split_into_words=True, padding="max_length", return_tensors="pt", max_length=max_seq_length
+            tokens,
+            is_split_into_words=True,
+            add_special_tokens=True,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=max_seq_length,
+            truncation="longest_first",
         )
 
         word_ids = tokenization.word_ids()
 
         word_ids = torch.tensor([word_id if word_id is not None else -1 for word_id in word_ids])
-        input_ids = inputs["input_ids"].squeeze()
-        labels = input_ids.copy()
-        attention_mask = inputs["attention_mask"].squeeze()
+        input_ids = tokenization["input_ids"].squeeze()
+        labels = input_ids.detach().clone()
+        attention_mask = tokenization["attention_mask"].squeeze()
 
         # for this first version, we will only use masks, just like in https://arxiv.org/abs/1905.07129
         # we could also try to swap some entities with random ones, to make our model learn how to disentangle all that.
@@ -445,24 +446,21 @@ def convert_examples_to_features_entity_mlm(
 
         input_ids[basic_mask] = tokenizer.mask_token_id  # masking all picked tokens
 
-        assert len(input_ids) == max_seq_length
-        assert len(attention_mask) == max_seq_length
-        assert len(segment_ids) == max_seq_length
+        assert len(input_ids.tolist()) == max_seq_length
+        assert len(attention_mask.tolist()) == max_seq_length
 
-        if ex_index < 5:
-            logger.info("*** Example ***")
-            logger.info("guid: %s" % (example.guid))
-            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
-            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("input_mask: %s" % " ".join([str(x) for x in attention_mask]))
-            logger.info("input_mask: %s" % " ".join([str(x) for x in basic_mask]))
-            logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-            logger.info("labels: %s" % " ".join([str(x) for x in labels]))
+        # if ex_index < 5:
+        #     logger.info("*** Example ***")
+        #     logger.info("guid: %s" % (example.guid))
+        #     logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
+        #     logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+        #     logger.info("input_mask: %s" % " ".join([str(x) for x in attention_mask]))
+        #     logger.info("input_mask: %s" % " ".join([str(x) for x in basic_mask]))
+        #     logger.info("labels: %s" % " ".join([str(x) for x in labels]))
         features.append(
             mlmInputFeatures(
                 input_ids=input_ids.tolist(),
-                input_mask=input_mask.tolist(),
-                segment_ids=segment_ids.tolist(),
+                input_mask=attention_mask.tolist(),
                 basic_mask=basic_mask.tolist(),
                 labels=labels.tolist(),
             )
