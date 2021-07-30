@@ -21,16 +21,16 @@
 from __future__ import absolute_import, division, print_function
 
 import csv
+import json
 import logging
 import os
 import sys
-from io import open
-import json
 from collections import Counter
+from io import open
 
-from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import matthews_corrcoef, f1_score
 import numpy as np
+from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import f1_score, matthews_corrcoef
 
 logger = logging.getLogger(__name__)
 
@@ -114,22 +114,22 @@ class DataProcessor(object):
             lines = []
             for line in reader:
                 if sys.version_info[0] == 2:
-                    line = list(unicode(cell, 'utf-8') for cell in line)
+                    line = list(unicode(cell, "utf-8") for cell in line)
                 lines.append(line)
             return lines
 
     @classmethod
     def _read_json(cls, input_file):
-        with open(input_file, 'r', encoding='utf8') as f:
+        with open(input_file, "r", encoding="utf8") as f:
             return json.load(f)
 
     @classmethod
     def _read_semeval_txt(clas, input_file):
-        with open(input_file, 'r', encoding='utf8') as f:
+        with open(input_file, "r", encoding="utf8") as f:
             examples = []
             example = []
             for line in f:
-                if line.strip() == '':
+                if line.strip() == "":
                     examples.append(example)
                     example = []
                 else:
@@ -142,13 +142,13 @@ class EntityTypeProcessor(DataProcessor):
 
     def get_train_examples(self, data_dir, dataset_type=None):
         """See base class."""
-        return self._create_examples(
-            self._read_json(os.path.join(data_dir, "train.json")), "train")
+        return self._create_examples(self._read_json(os.path.join(data_dir, "train.json")), "train")
 
     def get_dev_examples(self, data_dir, dataset_type):
         """See base class."""
         return self._create_examples(
-            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type)
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type
+        )
 
     def get_labels(self):
         """See base class."""
@@ -157,44 +157,81 @@ class EntityTypeProcessor(DataProcessor):
     def _create_examples(self, lines, set_type):
         """Creates examples for the training and dev sets."""
         examples = []
-        label_list = ['entity', 'location', 'time', 'organization', 'object', 'event', 'place', 'person', 'group']
+        # label_list = ['entity', 'location', 'time', 'organization', 'object', 'event', 'place', 'person', 'group']
+        label_list = ["SPC", "SER", "BUS"]
         for (i, line) in enumerate(lines):
             guid = i
-            text_a = line['sent']
-            text_b = (line['start'], line['end'])
+            # text_a = line['sent']
+            text_a = line["sent"]
+            text_b = (line["subj_start"], line["subj_end"])
+            subj_label = line["subj_label"]
             label = [0 for item in range(len(label_list))]
-            for item in line['labels']:
-                label[label_list.index(item)] = 1
+            label[label_list.index(subj_label)] = 1
+            # for item in line["subj_label"]:
+            #     label[label_list.index(item)] = 1 # an entity could habe multiple labels, but not in our case here.
 
-            examples.append(
-                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
 
 
-relations = ['per:siblings', 'per:parents', 'org:member_of', 'per:origin', 'per:alternate_names', 'per:date_of_death',
-             'per:title', 'org:alternate_names', 'per:countries_of_residence', 'org:stateorprovince_of_headquarters',
-             'per:city_of_death', 'per:schools_attended', 'per:employee_of', 'org:members', 'org:dissolved',
-             'per:date_of_birth', 'org:number_of_employees/members', 'org:founded', 'org:founded_by',
-             'org:political/religious_affiliation', 'org:website', 'org:top_members/employees', 'per:children',
-             'per:cities_of_residence', 'per:cause_of_death', 'org:shareholders', 'per:age', 'per:religion',
-             'no_relation',
-             'org:parents', 'org:subsidiaries', 'per:country_of_birth', 'per:stateorprovince_of_death',
-             'per:city_of_birth',
-             'per:stateorprovinces_of_residence', 'org:country_of_headquarters', 'per:other_family',
-             'per:stateorprovince_of_birth',
-             'per:country_of_death', 'per:charges', 'org:city_of_headquarters', 'per:spouse']
+relations = [
+    "per:siblings",
+    "per:parents",
+    "org:member_of",
+    "per:origin",
+    "per:alternate_names",
+    "per:date_of_death",
+    "per:title",
+    "org:alternate_names",
+    "per:countries_of_residence",
+    "org:stateorprovince_of_headquarters",
+    "per:city_of_death",
+    "per:schools_attended",
+    "per:employee_of",
+    "org:members",
+    "org:dissolved",
+    "per:date_of_birth",
+    "org:number_of_employees/members",
+    "org:founded",
+    "org:founded_by",
+    "org:political/religious_affiliation",
+    "org:website",
+    "org:top_members/employees",
+    "per:children",
+    "per:cities_of_residence",
+    "per:cause_of_death",
+    "org:shareholders",
+    "per:age",
+    "per:religion",
+    "no_relation",
+    "org:parents",
+    "org:subsidiaries",
+    "per:country_of_birth",
+    "per:stateorprovince_of_death",
+    "per:city_of_birth",
+    "per:stateorprovinces_of_residence",
+    "org:country_of_headquarters",
+    "per:other_family",
+    "per:stateorprovince_of_birth",
+    "per:country_of_death",
+    "per:charges",
+    "org:city_of_headquarters",
+    "per:spouse",
+]
 
 
 class TACREDProcessor(DataProcessor):
     def get_train_examples(self, data_dir, dataset_type, negative_sample):
         """See base class."""
         return self._create_examples(
-            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample)
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample
+        )
 
     def get_dev_examples(self, data_dir, dataset_type, negative_sample):
         """See base class."""
         return self._create_examples(
-            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample)
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample
+        )
 
     def get_labels(self):
         """See base class."""
@@ -208,53 +245,66 @@ class TACREDProcessor(DataProcessor):
         for (i, line) in enumerate(lines):
             guid = i
             # text_a: tokenized words
-            text_a = line['token']
+            text_a = line["token"]
             # text_b: other information
-            text_b = (line['subj_start'], line['subj_end'], line['obj_start'], line['obj_end'])
-            label = line['relation']
-            if label == 'no_relation' and dataset_type == 'train':
+            text_b = (line["subj_start"], line["subj_end"], line["obj_start"], line["obj_end"])
+            label = line["relation"]
+            if label == "no_relation" and dataset_type == "train":
                 no_relation_number -= 1
                 if no_relation_number > 0:
-                    examples.append(
-                        InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+                    examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
                 else:
                     continue
             else:
-                examples.append(
-                    InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+                examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
 
         return examples
 
 
-semeval_relations = ['Cause-Effect(e1,e2)', 'Cause-Effect(e2,e1)',
-                     'Content-Container(e1,e2)', 'Content-Container(e2,e1)',
-                     'Entity-Origin(e1,e2)', 'Entity-Origin(e2,e1)',
-                     'Member-Collection(e1,e2)', 'Member-Collection(e2,e1)',
-                     'Component-Whole(e1,e2)', 'Component-Whole(e2,e1)',
-                     'Entity-Destination(e1,e2)', 'Entity-Destination(e2,e1)',
-                     'Instrument-Agency(e1,e2)', 'Instrument-Agency(e2,e1)',
-                     'Message-Topic(e1,e2)', 'Message-Topic(e2,e1)',
-                     'Product-Producer(e1,e2)', 'Product-Producer(e2,e1)',
-                     'Other'
-                     ]
+semeval_relations = [
+    "Cause-Effect(e1,e2)",
+    "Cause-Effect(e2,e1)",
+    "Content-Container(e1,e2)",
+    "Content-Container(e2,e1)",
+    "Entity-Origin(e1,e2)",
+    "Entity-Origin(e2,e1)",
+    "Member-Collection(e1,e2)",
+    "Member-Collection(e2,e1)",
+    "Component-Whole(e1,e2)",
+    "Component-Whole(e2,e1)",
+    "Entity-Destination(e1,e2)",
+    "Entity-Destination(e2,e1)",
+    "Instrument-Agency(e1,e2)",
+    "Instrument-Agency(e2,e1)",
+    "Message-Topic(e1,e2)",
+    "Message-Topic(e2,e1)",
+    "Product-Producer(e1,e2)",
+    "Product-Producer(e2,e1)",
+    "Other",
+]
 
-semeval_relations_no_direction = ['Content-Container', 'Cause-Effect', 'Entity-Origin', 'Member-Collection',
-                                  'Component-Whole',
-                                  'Entity-Destination', 'Instrument-Agency', 'Other', 'Message-Topic',
-                                  'Product-Producer']
+semeval_relations_no_direction = [
+    "Content-Container",
+    "Cause-Effect",
+    "Entity-Origin",
+    "Member-Collection",
+    "Component-Whole",
+    "Entity-Destination",
+    "Instrument-Agency",
+    "Other",
+    "Message-Topic",
+    "Product-Producer",
+]
 
 
 class SemEvalProcessor(DataProcessor):
-
     def get_train_examples(self, data_dir):
         """See base class."""
-        return self._create_examples(
-            self._read_semeval_txt(os.path.join(data_dir, "train.txt")), "train")
+        return self._create_examples(self._read_semeval_txt(os.path.join(data_dir, "train.txt")), "train")
 
     def get_dev_examples(self, data_dir):
         """See base class."""
-        return self._create_examples(
-            self._read_semeval_txt(os.path.join(data_dir, "test.txt")), "test")
+        return self._create_examples(self._read_semeval_txt(os.path.join(data_dir, "test.txt")), "test")
 
     def get_labels(self):
         """See base class."""
@@ -265,45 +315,52 @@ class SemEvalProcessor(DataProcessor):
         """Creates examples for the training and dev sets."""
         examples = []
         for (i, line) in enumerate(lines):
-            sentence = line[0].split('\t')[1][1:-1]
+            sentence = line[0].split("\t")[1][1:-1]
             label = line[1]
             # I have checked @ and ^ do not appear in the corpus.
-            sentence = sentence.replace('<e1>', '@ ').replace('</e1>', ' @').replace('<e2>', '^ ').replace('</e2>',
-                                                                                                           ' ^')
+            sentence = (
+                sentence.replace("<e1>", "@ ").replace("</e1>", " @").replace("<e2>", "^ ").replace("</e2>", " ^")
+            )
             guid = i
             # text_a: raw text including @ and ^, after word piece, just tokens.index['@'] to get the first index
             text_a = sentence
             # text_b: None
             text_b = None
-            examples.append(
-                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
 
         return examples
 
 
-def convert_examples_to_features_entity_typing(examples, label_list, max_seq_length,
-                                               tokenizer, output_mode,
-                                               cls_token_at_end=False,
-                                               cls_token='[CLS]',
-                                               cls_token_segment_id=1,
-                                               sep_token='[SEP]',
-                                               sep_token_extra=False,
-                                               pad_on_left=False,
-                                               pad_token=0,
-                                               pad_token_segment_id=0,
-                                               sequence_a_segment_id=0,
-                                               sequence_b_segment_id=1,
-                                               mask_padding_with_zero=True):
-    """ Loads a data file into a list of `InputBatch`s
-        `cls_token_at_end` define the location of the CLS token:
-            - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
-            - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
-        `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+def convert_examples_to_features_entity_typing(
+    examples,
+    label_list,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
     """
 
     label_map = {label: i for i, label in enumerate(label_list)}
     features = []
     for (ex_index, example) in enumerate(examples):
+        if ex_index > 70000:
+            continue
         if ex_index % 10000 == 0:
             logger.info("Writing example %d of %d" % (ex_index, len(examples)))
 
@@ -312,8 +369,15 @@ def convert_examples_to_features_entity_typing(examples, label_list, max_seq_len
         tokens_0_start = tokenizer.tokenize(sentence[:start])
         tokens_start_end = tokenizer.tokenize(sentence[start:end])
         tokens_end_last = tokenizer.tokenize(sentence[end:])
-        tokens = [cls_token] + tokens_0_start + tokenizer.tokenize('@') + tokens_start_end + tokenizer.tokenize(
-            '@') + tokens_end_last + [sep_token]
+        tokens = (
+            [cls_token]
+            + tokens_0_start
+            + tokenizer.tokenize("@")
+            + tokens_start_end
+            + tokenizer.tokenize("@")
+            + tokens_end_last
+            + [sep_token]
+        )
         start = 1 + len(tokens_0_start)
         end = 1 + len(tokens_0_start) + 1 + len(tokens_start_end)
 
@@ -334,9 +398,13 @@ def convert_examples_to_features_entity_typing(examples, label_list, max_seq_len
             input_ids = input_ids + ([pad_token] * padding_length)
             input_mask = input_mask + ([0 if mask_padding_with_zero else 1] * padding_length)
             segment_ids = segment_ids + ([pad_token_segment_id] * padding_length)
-        assert len(input_ids) == max_seq_length
-        assert len(input_mask) == max_seq_length
-        assert len(segment_ids) == max_seq_length
+
+        try:
+            assert len(input_ids) == max_seq_length
+            assert len(input_mask) == max_seq_length
+            assert len(segment_ids) == max_seq_length
+        except AssertionError:
+            continue
 
         if output_mode == "classification":
             label_id = example.label
@@ -348,41 +416,49 @@ def convert_examples_to_features_entity_typing(examples, label_list, max_seq_len
         if ex_index < 5:
             logger.info("*** Example ***")
             logger.info("guid: %s" % (example.guid))
-            logger.info("tokens: %s" % " ".join(
-                [str(x) for x in tokens]))
+            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
             logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
             logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
             logger.info("label: {}".format(label_id))
+
         start_id = np.zeros(max_seq_length)
         start_id[start] = 1
         features.append(
-            InputFeatures(input_ids=input_ids,
-                          input_mask=input_mask,
-                          segment_ids=segment_ids,
-                          label_id=label_id,
-                          start_id=start_id))
+            InputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                segment_ids=segment_ids,
+                label_id=label_id,
+                start_id=start_id,
+            )
+        )
     return features
 
 
-def convert_examples_to_features_tacred(examples, label_list, max_seq_length,
-                                        tokenizer, output_mode,
-                                        cls_token_at_end=False,
-                                        cls_token='[CLS]',
-                                        cls_token_segment_id=1,
-                                        sep_token='[SEP]',
-                                        sep_token_extra=False,
-                                        pad_on_left=False,
-                                        pad_token=0,
-                                        pad_token_segment_id=0,
-                                        sequence_a_segment_id=0,
-                                        sequence_b_segment_id=1,
-                                        mask_padding_with_zero=True):
-    """ Loads a data file into a list of `InputBatch`s
-        `cls_token_at_end` define the location of the CLS token:
-            - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
-            - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
-        `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+def convert_examples_to_features_tacred(
+    examples,
+    label_list,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
     """
 
     label_map = {label: i for i, label in enumerate(label_list)}
@@ -396,32 +472,32 @@ def convert_examples_to_features_tacred(examples, label_list, max_seq_length,
         subj_start, subj_end, obj_start, obj_end = example.text_b
         relation = example.label
         if subj_start < obj_start:
-            tokens = tokenizer.tokenize(' '.join(text_a[:subj_start]))
+            tokens = tokenizer.tokenize(" ".join(text_a[:subj_start]))
             subj_special_start = len(tokens)
-            tokens += ['@']
-            tokens += tokenizer.tokenize(' '.join(text_a[subj_start:subj_end + 1]))
-            tokens += ['@']
-            tokens += tokenizer.tokenize(' '.join(text_a[subj_end + 1:obj_start]))
+            tokens += ["@"]
+            tokens += tokenizer.tokenize(" ".join(text_a[subj_start : subj_end + 1]))
+            tokens += ["@"]
+            tokens += tokenizer.tokenize(" ".join(text_a[subj_end + 1 : obj_start]))
             obj_special_start = len(tokens)
-            tokens += ['#']
-            tokens += tokenizer.tokenize(' '.join(text_a[obj_start:obj_end + 1]))
-            tokens += ['#']
-            tokens += tokenizer.tokenize(' '.join(text_a[obj_end + 1:]))
+            tokens += ["#"]
+            tokens += tokenizer.tokenize(" ".join(text_a[obj_start : obj_end + 1]))
+            tokens += ["#"]
+            tokens += tokenizer.tokenize(" ".join(text_a[obj_end + 1 :]))
         else:
-            tokens = tokenizer.tokenize(' '.join(text_a[:obj_start]))
+            tokens = tokenizer.tokenize(" ".join(text_a[:obj_start]))
             obj_special_start = len(tokens)
-            tokens += ['#']
-            tokens += tokenizer.tokenize(' '.join(text_a[obj_start:obj_end + 1]))
-            tokens += ['#']
-            tokens += tokenizer.tokenize(' '.join(text_a[obj_end + 1:subj_start]))
+            tokens += ["#"]
+            tokens += tokenizer.tokenize(" ".join(text_a[obj_start : obj_end + 1]))
+            tokens += ["#"]
+            tokens += tokenizer.tokenize(" ".join(text_a[obj_end + 1 : subj_start]))
             subj_special_start = len(tokens)
-            tokens += ['@']
-            tokens += tokenizer.tokenize(' '.join(text_a[subj_start:subj_end + 1]))
-            tokens += ['@']
-            tokens += tokenizer.tokenize(' '.join(text_a[subj_end + 1:]))
+            tokens += ["@"]
+            tokens += tokenizer.tokenize(" ".join(text_a[subj_start : subj_end + 1]))
+            tokens += ["@"]
+            tokens += tokenizer.tokenize(" ".join(text_a[subj_end + 1 :]))
 
         _truncate_seq_pair(tokens, [], max_seq_length - 2)
-        tokens = ['<s>'] + tokens + ['</s>']
+        tokens = ["<s>"] + tokens + ["</s>"]
         subj_special_start += 1
         obj_special_start += 1
         relation = label_map[example.label]
@@ -456,8 +532,7 @@ def convert_examples_to_features_tacred(examples, label_list, max_seq_length,
         if ex_index < 5:
             logger.info("*** Example ***")
             logger.info("guid: %s" % (example.guid))
-            logger.info("tokens: %s" % " ".join(
-                [str(x) for x in tokens]))
+            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
             logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
             logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
@@ -474,33 +549,41 @@ def convert_examples_to_features_tacred(examples, label_list, max_seq_length,
         obj_special_start_id[obj_special_start] = 1
 
         features.append(
-            tacredInputFeatures(input_ids=input_ids,
-                                input_mask=input_mask,
-                                segment_ids=segment_ids,
-                                label_id=label_id,
-                                subj_special_start_id=subj_special_start_id,
-                                obj_special_start_id=obj_special_start_id))
+            tacredInputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                segment_ids=segment_ids,
+                label_id=label_id,
+                subj_special_start_id=subj_special_start_id,
+                obj_special_start_id=obj_special_start_id,
+            )
+        )
     return features
 
 
-def convert_examples_to_features_semeval(examples, label_list, max_seq_length,
-                                         tokenizer, output_mode,
-                                         cls_token_at_end=False,
-                                         cls_token='[CLS]',
-                                         cls_token_segment_id=1,
-                                         sep_token='[SEP]',
-                                         sep_token_extra=False,
-                                         pad_on_left=False,
-                                         pad_token=0,
-                                         pad_token_segment_id=0,
-                                         sequence_a_segment_id=0,
-                                         sequence_b_segment_id=1,
-                                         mask_padding_with_zero=True):
-    """ Loads a data file into a list of `InputBatch`s
-        `cls_token_at_end` define the location of the CLS token:
-            - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
-            - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
-        `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+def convert_examples_to_features_semeval(
+    examples,
+    label_list,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
     """
 
     label_map = {label: i for i, label in enumerate(label_list)}
@@ -516,9 +599,9 @@ def convert_examples_to_features_semeval(examples, label_list, max_seq_length,
         tokens = tokenizer.tokenize(text_a)
 
         _truncate_seq_pair(tokens, [], max_seq_length - 2)
-        tokens = ['<s>'] + tokens + ['</s>']
-        e1_start = tokens.index('Ġ@')
-        e2_start = tokens.index('Ġ^')
+        tokens = ["<s>"] + tokens + ["</s>"]
+        e1_start = tokens.index("Ġ@")
+        e2_start = tokens.index("Ġ^")
 
         relation = label_map[example.label]
 
@@ -555,8 +638,7 @@ def convert_examples_to_features_semeval(examples, label_list, max_seq_length,
         if ex_index < 5:
             logger.info("*** Example ***")
             logger.info("guid: %s" % (example.guid))
-            logger.info("tokens: %s" % " ".join(
-                [str(x) for x in tokens]))
+            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
             logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
             logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
@@ -568,12 +650,15 @@ def convert_examples_to_features_semeval(examples, label_list, max_seq_length,
         e2_start_id[e2_start] = 1
 
         features.append(
-            semevalInputFeatures(input_ids=input_ids,
-                                 input_mask=input_mask,
-                                 segment_ids=segment_ids,
-                                 label_id=label_id,
-                                 e1_start_id=e1_start_id,
-                                 e2_start_id=e2_start_id))
+            semevalInputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                segment_ids=segment_ids,
+                label_id=label_id,
+                e1_start_id=e1_start_id,
+                e2_start_id=e2_start_id,
+            )
+        )
     return features
 
 
@@ -643,23 +728,23 @@ def micro_f1_tacred(preds, labels):
 
 
 def micro_f1(preds, labels):
-    return f1_score(y_true=labels, y_pred=preds, average='micro')
+    return f1_score(y_true=labels, y_pred=preds, average="micro")
 
 
 def macro_f1(preds, labels):
-    return f1_score(y_true=labels, y_pred=preds, average='macro')
+    return f1_score(y_true=labels, y_pred=preds, average="macro")
 
 
 def entity_typing_accuracy(out, l):
     def f1(p, r):
-        if r == 0.:
-            return 0.
+        if r == 0.0:
+            return 0.0
         return 2 * p * r / float(p + r)
 
     def loose_macro(true, pred):
         num_entities = len(true)
-        p = 0.
-        r = 0.
+        p = 0.0
+        r = 0.0
         for true_labels, predicted_labels in zip(true, pred):
             if len(predicted_labels) > 0:
                 p += len(set(predicted_labels).intersection(set(true_labels))) / float(len(predicted_labels))
@@ -670,9 +755,9 @@ def entity_typing_accuracy(out, l):
         return precision, recall, f1(precision, recall)
 
     def loose_micro(true, pred):
-        num_predicted_labels = 0.
-        num_true_labels = 0.
-        num_correct_labels = 0.
+        num_predicted_labels = 0.0
+        num_true_labels = 0.0
+        num_correct_labels = 0.0
         for true_labels, predicted_labels in zip(true, pred):
             num_predicted_labels += len(predicted_labels)
             num_true_labels += len(true_labels)
@@ -680,7 +765,7 @@ def entity_typing_accuracy(out, l):
         if num_predicted_labels > 0:
             precision = num_correct_labels / num_predicted_labels
         else:
-            precision = 0.
+            precision = 0.0
         recall = num_correct_labels / num_true_labels
         return precision, recall, f1(precision, recall)
 
@@ -765,11 +850,11 @@ def pearson_and_spearman(preds, labels):
 
 def compute_metrics(task_name, preds, labels):
     assert len(preds) == len(labels)
-    if task_name == 'entity_type':
+    if task_name == "entity_type":
         return entity_typing_accuracy(preds, labels)
-    elif task_name == 'tacred':
+    elif task_name == "tacred":
         return micro_f1_tacred(preds, labels)
-    elif task_name == 'semeval':
+    elif task_name == "semeval":
         return macro_f1_semeval(preds, labels)
     else:
         raise KeyError(task_name)

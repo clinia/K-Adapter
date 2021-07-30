@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=$GPU python fac-adapter.py  \
         --model_name=roberta-large  \
         --data_dir=./data/ner_data/custom_data  \
         --output_dir trex_output \
-        --restore '' \
+        --restore 'yes' \
         --do_train  \
         --do_eval   \
         --evaluate_during_training 'True' \
