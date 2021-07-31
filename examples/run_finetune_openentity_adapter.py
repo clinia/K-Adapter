@@ -642,7 +642,8 @@ class AdapterModel(nn.Module):
         # pooler_output = outputs[1]
         hidden_states = outputs[2]
         num = len(hidden_states)
-        hidden_states_last = torch.zeros(sequence_output.size()).to("cuda")
+        # hidden_states_last = torch.zeros(sequence_output.size()).to("cuda")
+        hidden_states_last = torch.zeros(sequence_output.size()).to("cpu")
 
         adapter_hidden_states = []
         adapter_hidden_states_count = 0
