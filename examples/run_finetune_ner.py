@@ -40,6 +40,8 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
 
+from transformers import RobertaTokenizerFast
+
 from pytorch_transformers import (
     WEIGHTS_NAME,
     AdamW,
@@ -49,7 +51,6 @@ from pytorch_transformers import (
     RobertaConfig,
     RobertaForSequenceClassification,
     RobertaModel,
-    RobertaTokenizer,
     WarmupLinearSchedule,
     XLMConfig,
     XLMForSequenceClassification,
@@ -62,7 +63,7 @@ from pytorch_transformers.modeling_roberta import gelu
 from pytorch_transformers.my_modeling_roberta import RobertaForEntityTyping
 from utils_glue import (
     compute_metrics,
-    convert_examples_to_features_entity_typing,
+    convert_examples_to_features_ner,
     output_modes,
     processors,
 )
@@ -93,7 +94,7 @@ def set_seed(args):
 def train(args, train_dataset, model, tokenizer):
     """Train the model"""
     pretrained_model = model[0]
-    et_model = model[1]
+    ner_model = model[1]
 
     # if args.local_rank in [-1, 0]:
     # tb_writer = SummaryWriter(log_dir="runs/" + args.my_model_name)
@@ -115,22 +116,22 @@ def train(args, train_dataset, model, tokenizer):
     if args.freeze_bert:
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in et_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "params": [p for n, p in ner_model.named_parameters() if not any(nd in n for nd in no_decay)],
                 "weight_decay": args.weight_decay,
             },
             {
-                "params": [p for n, p in et_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "params": [p for n, p in ner_model.named_parameters() if any(nd in n for nd in no_decay)],
                 "weight_decay": 0.0,
             },
         ]
     else:
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in et_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "params": [p for n, p in ner_model.named_parameters() if not any(nd in n for nd in no_decay)],
                 "weight_decay": args.weight_decay,
             },
             {
-                "params": [p for n, p in et_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "params": [p for n, p in ner_model.named_parameters() if any(nd in n for nd in no_decay)],
                 "weight_decay": 0.0,
             },
             {
@@ -150,28 +151,28 @@ def train(args, train_dataset, model, tokenizer):
         except ImportError:
             raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
         if args.freeze_bert:
-            et_model, optimizer = amp.initialize(et_model, optimizer, opt_level=args.fp16_opt_level)
+            ner_model, optimizer = amp.initialize(ner_model, optimizer, opt_level=args.fp16_opt_level)
         else:
-            et_model, optimizer = amp.initialize(et_model, optimizer, opt_level=args.fp16_opt_level)
+            ner_model, optimizer = amp.initialize(ner_model, optimizer, opt_level=args.fp16_opt_level)
             pretrained_model, optimizer = amp.initialize(pretrained_model, optimizer, opt_level=args.fp16_opt_level)
 
     # multi-gpu training (should be after apex fp16 initialization)
     if args.n_gpu > 1:
         if args.freeze_bert:
-            et_model = torch.nn.DataParallel(et_model)
+            ner_model = torch.nn.DataParallel(ner_model)
         else:
             pretrained_model = torch.nn.DataParallel(pretrained_model)
-            et_model = torch.nn.DataParallel(et_model)
+            ner_model = torch.nn.DataParallel(ner_model)
 
     # Distributed training (should be after apex fp16 initialization)
     if args.local_rank != -1:
         if args.freeze_bert:
-            et_model = torch.nn.parallel.DistributedDataParallel(
-                et_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
+            ner_model = torch.nn.parallel.DistributedDataParallel(
+                ner_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
             )
         else:
-            et_model = torch.nn.parallel.DistributedDataParallel(
-                et_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
+            ner_model = torch.nn.parallel.DistributedDataParallel(
+                ner_model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True
             )
             pretrained_model = torch.nn.parallel.DistributedDataParallel(
                 pretrained_model,
@@ -204,10 +205,10 @@ def train(args, train_dataset, model, tokenizer):
             logger.info("Load from output_dir {}".format(output_dir))
 
             # args = torch.load(os.path.join(output_dir, 'training_args.bin'))
-            if hasattr(et_model, "module"):
-                et_model.module.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
+            if hasattr(ner_model, "module"):
+                ner_model.module.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
             else:  # Take care of distributed/parallel training
-                et_model.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
+                ner_model.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
 
             if hasattr(pretrained_model, "module"):
                 pretrained_model.module.load_state_dict(
@@ -237,7 +238,7 @@ def train(args, train_dataset, model, tokenizer):
     tr_loss, logging_loss = 0.0, 0.0
     # model.zero_grad()
     pretrained_model.zero_grad()
-    et_model.zero_grad()
+    ner_model.zero_grad()
 
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
@@ -251,20 +252,17 @@ def train(args, train_dataset, model, tokenizer):
                 pretrained_model.eval()
             else:
                 pretrained_model.train()
-            et_model.train()
+            ner_model.train()
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
-                "token_type_ids": batch[2]
-                if args.model_type in ["bert", "xlnet"]
-                else None,  # XLM and RoBERTa don't use segment_ids
-                "labels": batch[3],
-                "start_id": batch[4],
+                "labels": batch[2],
+                "word_ids": batch[3],
             }
             # outputs = model(**inputs)
             pretrained_model_outputs = pretrained_model(**inputs)
-            outputs = et_model(pretrained_model_outputs, **inputs)
+            outputs = ner_model(pretrained_model_outputs, **inputs)
 
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
 
@@ -283,7 +281,7 @@ def train(args, train_dataset, model, tokenizer):
                 loss.backward()
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 torch.nn.utils.clip_grad_norm_(pretrained_model.parameters(), args.max_grad_norm)
-                torch.nn.utils.clip_grad_norm_(et_model.parameters(), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(ner_model.parameters(), args.max_grad_norm)
 
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -292,7 +290,7 @@ def train(args, train_dataset, model, tokenizer):
 
                 # model.zero_grad()
                 pretrained_model.zero_grad()
-                et_model.zero_grad()
+                ner_model.zero_grad()
                 global_step += 1
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -311,7 +309,7 @@ def train(args, train_dataset, model, tokenizer):
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
                     model_to_save = (
-                        et_model.module if hasattr(et_model, "module") else et_model
+                        ner_model.module if hasattr(ner_model, "module") else ner_model
                     )  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
                     model_to_save = (
@@ -326,7 +324,7 @@ def train(args, train_dataset, model, tokenizer):
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
                 logger.info("***** evaluating *****")
-                model = (pretrained_model, et_model)
+                model = (pretrained_model, ner_model)
 
                 results = evaluate(args, model, tokenizer, prefix="")
                 break
@@ -334,11 +332,11 @@ def train(args, train_dataset, model, tokenizer):
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             logger.info("***** evaluating *****")
-            model = (pretrained_model, et_model)
+            model = (pretrained_model, ner_model)
 
             results = evaluate(args, model, tokenizer, prefix="")
             break
-        model = (pretrained_model, et_model)
+        model = (pretrained_model, ner_model)
         logger.info("***** evaluating *****")
 
         results = evaluate(args, model, tokenizer, prefix="")
@@ -356,7 +354,7 @@ save_results = []
 
 def evaluate(args, model, tokenizer, prefix=""):
     pretrained_model = model[0]
-    et_model = model[1]
+    ner_model = model[1]
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_outputs_dirs = (args.output_dir, args.output_dir + "-MM") if args.task_name == "mnli" else (args.output_dir,)
@@ -389,7 +387,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             index = 0
             for batch in tqdm(eval_dataloader, desc="Evaluating"):
                 pretrained_model.eval()
-                et_model.eval()
+                ner_model.eval()
                 # model.eval()
                 index += 1
                 # if index>10:
@@ -399,13 +397,12 @@ def evaluate(args, model, tokenizer, prefix=""):
                     inputs = {
                         "input_ids": batch[0],
                         "attention_mask": batch[1],
-                        "word_ids": batch[2],
-                        "labels": batch[3],
-                        "start_id": batch[4],
+                        "labels": batch[2],
+                        "word_ids": batch[3],
                     }
                     # outputs = model(**inputs)
                     pretrained_model_outputs = pretrained_model(**inputs)
-                    outputs = et_model(pretrained_model_outputs, **inputs)
+                    outputs = ner_model(pretrained_model_outputs, **inputs)
                     tmp_eval_loss, logits = outputs[:2]
 
                     eval_loss += tmp_eval_loss.mean().item()
@@ -425,6 +422,10 @@ def evaluate(args, model, tokenizer, prefix=""):
                 preds = np.argmax(preds, axis=1)
             elif args.output_mode == "regression":
                 preds = np.squeeze(preds)
+
+            mask = inputs["word_ids"] != -1
+            preds = preds[mask]
+            out_label_ids = out_label_ids[mask]
 
             result = compute_metrics(eval_task, preds, out_label_ids)
             logger.info("{} micro f1 result:{}".format(dataset_type, result))
@@ -471,7 +472,7 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
             if evaluate
             else processor.get_train_examples(args.data_dir, dataset_type)
         )
-        features = convert_examples_to_features_entity_typing(
+        features = convert_examples_to_features_ner(
             examples,
             label_list,
             args.max_seq_length,
@@ -498,14 +499,13 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
     # Convert to Tensors and build dataset
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
-    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     if output_mode == "classification":
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
     elif output_mode == "regression":
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
-    all_start_ids = torch.tensor([f.start_id for f in features], dtype=torch.float)
+    all_word_ids = torch.tensor([f.word_ids for f in features], dtype=torch.float)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_start_ids)
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_label_ids, all_word_ids)
     return dataset
 
 
@@ -572,6 +572,7 @@ class PretrainedModel(nn.Module):
         token_type_ids=None,
         position_ids=None,
         head_mask=None,
+        word_ids=None,
         labels=None,
         start_id=None,
     ):
@@ -662,20 +663,20 @@ class AdapterModel(nn.Module):
         return outputs  # (loss), logits, (hidden_states), (attentions)
 
 
-class ETModel(nn.Module):
+class NERModel(nn.Module):
     def __init__(self, args, pretrained_model_config, fac_adapter, et_adapter, lin_adapter):
-        super(ETModel, self).__init__()
+        super(NERModel, self).__init__()
         self.args = args
         self.config = pretrained_model_config
 
         # self.adapter = AdapterModel(self.args, pretrained_model_config)
         self.fac_adapter = fac_adapter
-        self.et_adapter = et_adapter
+        self.ner_adapter = et_adapter
         self.lin_adapter = lin_adapter
         if args.freeze_adapter and (self.fac_adapter is not None):
             for p in self.fac_adapter.parameters():
                 p.requires_grad = False
-        if args.freeze_adapter and (self.et_adapter is not None):
+        if args.freeze_adapter and (self.ner_adapter is not None):
             for p in self.et_adapter.parameters():
                 p.requires_grad = False
         if args.freeze_adapter and (self.lin_adapter is not None):
@@ -696,7 +697,7 @@ class ETModel(nn.Module):
 
         # self.num_labels = config.num_labels
         # self.num_labels = 9
-        self.num_labels = 3
+        self.num_labels = 7
         self.dense = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
         self.out_proj = nn.Linear(self.config.hidden_size, self.num_labels)
@@ -709,6 +710,7 @@ class ETModel(nn.Module):
         token_type_ids=None,
         position_ids=None,
         head_mask=None,
+        word_ids=None,
         labels=None,
         start_id=None,
     ):
@@ -733,10 +735,7 @@ class ETModel(nn.Module):
             lin_features = self.task_dense_lin(torch.cat([combine_features, lin_adapter_outputs], dim=2))
             task_features = self.task_dense(torch.cat([fac_features, lin_features], dim=2))
 
-        start_id = start_id.unsqueeze(1)
-        entity_output = torch.bmm(start_id, task_features)
-        entity_output = entity_output.squeeze(1)
-        logits = self.out_proj(self.dropout(self.dense(entity_output)))
+        logits = self.out_proj(self.dropout(self.dense(task_features)))
 
         outputs = (logits,) + pretrained_model_outputs[2:]
         if labels is not None:
@@ -1025,7 +1024,7 @@ def main():
     # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     # model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
-    tokenizer = RobertaTokenizer.from_pretrained("roberta-large")
+    tokenizer = RobertaTokenizerFast.from_pretrained("roberta-large")
     pretrained_model = PretrainedModel(args)
     if args.meta_fac_adaptermodel:
         fac_adapter = AdapterModel(args, pretrained_model.config)
@@ -1033,18 +1032,18 @@ def main():
     else:
         fac_adapter = None
     if args.meta_et_adaptermodel:
-        et_adapter = AdapterModel(args, pretrained_model.config)
-        et_adapter = load_pretrained_adapter(et_adapter, args.meta_et_adaptermodel)
+        ner_adapter = AdapterModel(args, pretrained_model.config)
+        ner_adapter = load_pretrained_adapter(ner_adapter, args.meta_et_adaptermodel)
     else:
-        et_adapter = None
+        ner_adapter = None
     if args.meta_lin_adaptermodel:
         lin_adapter = AdapterModel(args, pretrained_model.config)
         lin_adapter = load_pretrained_adapter(lin_adapter, args.meta_lin_adaptermodel)
     else:
         lin_adapter = None
     # adapter_model = AdapterModel(pretrained_model.config,num_labels,args.adapter_size,args.adapter_interval,args.adapter_skip_layers)
-    et_model = ETModel(
-        args, pretrained_model.config, fac_adapter=fac_adapter, et_adapter=et_adapter, lin_adapter=lin_adapter
+    ner_model = NERModel(
+        args, pretrained_model.config, fac_adapter=fac_adapter, et_adapter=ner_adapter, lin_adapter=lin_adapter
     )
 
     if args.meta_bertmodel:
@@ -1077,9 +1076,9 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     pretrained_model.to(args.device)
-    et_model.to(args.device)
+    ner_model.to(args.device)
     # model.to(args.device)
-    model = (pretrained_model, et_model)
+    model = (pretrained_model, ner_model)
 
     logger.info("Training/evaluation parameters %s", args)
 
@@ -1099,7 +1098,7 @@ def main():
         # Save a trained model, configuration and tokenizer using `save_pretrained()`.
         # They can then be reloaded using `from_pretrained()`
         model_to_save = (
-            et_model.module if hasattr(et_model, "module") else et_model
+            ner_model.module if hasattr(ner_model, "module") else ner_model
         )  # Take care of distributed/parallel training
         model_to_save.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)

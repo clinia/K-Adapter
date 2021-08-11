@@ -29,6 +29,7 @@ from collections import Counter
 from io import open
 
 import numpy as np
+import torch
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import f1_score, matthews_corrcoef
 
@@ -65,6 +66,14 @@ class InputFeatures(object):
         self.segment_ids = segment_ids
         self.label_id = label_id
         self.start_id = start_id
+
+
+class NERInputFeatures(object):
+    def __init__(self, input_ids, input_mask, label_id, word_ids):
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.label_id = label_id
+        self.word_ids = word_ids
 
 
 class tacredInputFeatures(object):
@@ -136,6 +145,137 @@ class DataProcessor(object):
                     example.append(line.strip())
             return examples
 
+class NERProcessor(DataProcessor):
+        """Processor for the WNLI data set (GLUE version)."""
+
+    def get_train_examples(self, data_dir, dataset_type=None):
+        """See base class."""
+        return self._create_examples(self._read_json(os.path.join(data_dir, "train.json")), "train")
+
+    def get_dev_examples(self, data_dir, dataset_type):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type
+        )
+
+    def get_labels(self):
+        """See base class."""
+        return ["B-SPC", "B-SER", "B-BUS","I-SPC", "I-SER", "I-BUS", "O"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        # label_list = ['entity', 'location', 'time', 'organization', 'object', 'event', 'place', 'person', 'group']
+        label_list = ["B-SPC", "B-SER", "B-BUS","I-SPC", "I-SER", "I-BUS", "O"]
+        labels_to_id = {label:i for i, label in enumerate(label_list)}
+        for (i, line) in enumerate(lines):
+            guid = i
+            # text_a = line['sent']
+            text_a = line["token"]
+            text_b = None
+            labels = [labels_to_id[line["labels"][j]] for j in range(len(line["labels"]))]
+            
+            examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=labels))
+        return examples
+
+def convert_examples_to_features_ner(
+    examples,
+    label_list,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+    """
+
+    label_map = {label: i for i, label in enumerate(label_list)}
+    features = []
+    for (ex_index, example) in enumerate(examples):
+        # if ex_index > 70000:
+        #     continue
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d of %d" % (ex_index, len(examples)))
+
+        tokens = example.text_a
+        labels = example.label
+
+        tokenization = tokenizer(
+            tokens,
+            is_split_into_words=True,
+            add_special_tokens=True,
+            padding="max_length",
+            return_tensors="pt",
+            max_length=max_seq_length,
+            truncation="longest_first",
+        )
+
+        input_ids = tokenization["input_ids"]
+        input_mask = tokenization["attention_mask"]
+        word_ids = tokenization.word_ids()
+
+        previous_word_idx = None
+        label_all_tokens = True
+        label_ids = []
+        for word_idx in word_ids:
+            # Special tokens have a word id that is None. We set the label to -100 so they are automatically
+            # ignored in the loss function.
+            if word_idx is None:
+                label_ids.append(-100)
+            # We set the label for the first token of each word.
+            elif word_idx != previous_word_idx:
+                label_ids.append(labels[word_idx])
+            # For the other tokens in a word, we set the label to either the current label or -100, depending on
+            # the label_all_tokens flag.
+            else:
+                label_ids.append(labels[word_idx] if label_all_tokens else -100)
+            previous_word_idx = word_idx
+
+        label_ids= torch.tensor(label_ids)
+
+        word_ids = [word_id if word_id is not None else -1 for word_id in word_ids]
+
+
+        # try:
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(label_ids) == max_seq_length
+        # except AssertionError:
+        #     continue
+
+
+        if ex_index < 5:
+            logger.info("*** Example ***")
+            logger.info("guid: %s" % (example.guid))
+            logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            logger.info("labels: %s" % " ".join([str(x) for x in word_ids]))
+            logger.info("labels: %s" % " ".join([str(x) for x in label_ids]))
+
+        features.append(
+            NERInputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                label_id=label_ids,
+                word_ids = word_ids
+            )
+        )
+    return features
 
 class EntityTypeProcessor(DataProcessor):
     """Processor for the WNLI data set (GLUE version)."""
@@ -864,12 +1004,14 @@ processors = {
     "entity_type": EntityTypeProcessor,
     "tacred": TACREDProcessor,
     "semeval": SemEvalProcessor,
+    "ner": NERProcessor,
 }
 
 output_modes = {
     "entity_type": "classification",
     "tacred": "classification",
     "semeval": "classification",
+    "ner":"classification",
 }
 
 GLUE_TASKS_NUM_LABELS = {
