@@ -40,6 +40,7 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
 
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from transformers import RobertaTokenizerFast
 
 from pytorch_transformers import (
@@ -382,7 +383,8 @@ def evaluate(args, model, tokenizer, prefix=""):
             logger.info("  Batch size = %d", args.eval_batch_size)
             eval_loss = 0.0
             nb_eval_steps = 0
-            preds = []
+            all_preds = []
+            all_targets = []
             out_label_ids = None
             eval_acc = 0
             index = 0
@@ -408,31 +410,35 @@ def evaluate(args, model, tokenizer, prefix=""):
 
                     eval_loss += tmp_eval_loss.mean().item()
                 nb_eval_steps += 1
+                # logits has shape (bs, seq_len, num_labels)
+                logits_batch = logits
+                word_ids_batch = inputs["word_ids"]
+                targets_batch = inputs["labels"]
+                for logits, word_ids, targets in zip(logits_batch, word_ids_batch, targets_batch):
+                    mask = word_ids != -1
+                    logits = logits[mask]
+                    targets = targets[mask]
+                    # now i have vectors of various length
+                    preds = torch.argmax(logits, dim=-1)
 
-                for i in range(logits.shape[0]):
-                mask = inputs["word_ids"] != -1
-                logits = logits[mask]
+                    preds = preds.tolist()
+                    targets = targets.tolist()
 
-                out_label_ids = inputs["labels"]
-                out_label_ids = out_label_ids[mask]
-
-
-
-
-
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs["labels"].detach().cpu().numpy()
+                    all_preds.extend(preds)
+                    all_targets.extend(targets)
 
             eval_loss = eval_loss / nb_eval_steps
-                preds = np.argmax(preds, axis=1)
+            accuracy = accuracy_score(all_preds, all_targets)
+            precision_scores = precision_score(all_targets, all_preds)
+            recall_scores = recall_score(all_targets, all_preds)
+            f1_scores = f1_score(all_targets, all_preds)
 
+            logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
+            logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
+            logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
+            logger.info("{} accuracy:{}".format(dataset_type, accuracy))
 
-            mask = inputs["word_ids"] != -1
-            preds = preds[mask]
-            out_label_ids = out_label_ids[mask]
-
-            result = 
-            logger.info("{} micro f1 result:{}".format(dataset_type, result))
+            result = {"f1": f1_scores, "prec": precision_scores, "recall": recall_scores, "acc": accuracy}
 
             results[dataset_type] = result
             save_result = str(results)
