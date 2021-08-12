@@ -9,8 +9,8 @@ python examples/run_finetune_ner.py \
     --do_train  \
     --do_eval   \
     --task_name=$task     \
-    --data_dir=data/ner_data/et_data \
-    --output_dir=./et_output  \
+    --data_dir=data/ner_data/fine_tuning \
+    --output_dir=./ner_output  \
     --comment 'combine-adapter-trf' \
     --max_seq_length=64  \
     --per_gpu_eval_batch_size=4   \

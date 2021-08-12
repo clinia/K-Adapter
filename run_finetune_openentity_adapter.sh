@@ -10,7 +10,7 @@ python examples/run_finetune_openentity_adapter.py \
     --do_eval   \
     --task_name=$task     \
     --data_dir=data/ner_data/et_data \
-    --output_dir=./et_output  \
+    --output_dir=./et_output_no_pretraining  \
     --comment 'combine-adapter-trf' \
     --max_seq_length=64  \
     --per_gpu_eval_batch_size=4   \

@@ -8,3 +8,5 @@
 /mlm_output
 /runs
 /et_output
+/et_output_no_pretraining
+/ner_output

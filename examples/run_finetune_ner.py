@@ -51,6 +51,7 @@ from pytorch_transformers import (
     RobertaConfig,
     RobertaForSequenceClassification,
     RobertaModel,
+    RobertaTokenizer,
     WarmupLinearSchedule,
     XLMConfig,
     XLMForSequenceClassification,
@@ -381,7 +382,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             logger.info("  Batch size = %d", args.eval_batch_size)
             eval_loss = 0.0
             nb_eval_steps = 0
-            preds = None
+            preds = []
             out_label_ids = None
             eval_acc = 0
             index = 0
@@ -408,26 +409,29 @@ def evaluate(args, model, tokenizer, prefix=""):
                     eval_loss += tmp_eval_loss.mean().item()
                 nb_eval_steps += 1
 
-                if preds is None:
-                    preds = logits.detach().cpu().numpy()
-                    out_label_ids = inputs["labels"].detach().cpu().numpy()
-                else:
-                    preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                    out_label_ids = np.append(out_label_ids, inputs["labels"].detach().cpu().numpy(), axis=0)
+                for i in range(logits.shape[0]):
+                mask = inputs["word_ids"] != -1
+                logits = logits[mask]
+
+                out_label_ids = inputs["labels"]
+                out_label_ids = out_label_ids[mask]
+
+
+
+
+
+                preds = logits.detach().cpu().numpy()
+                out_label_ids = inputs["labels"].detach().cpu().numpy()
 
             eval_loss = eval_loss / nb_eval_steps
-            if args.task_name == "entity_type":
-                pass
-            elif args.output_mode == "classification":
                 preds = np.argmax(preds, axis=1)
-            elif args.output_mode == "regression":
-                preds = np.squeeze(preds)
+
 
             mask = inputs["word_ids"] != -1
             preds = preds[mask]
             out_label_ids = out_label_ids[mask]
 
-            result = compute_metrics(eval_task, preds, out_label_ids)
+            result = 
             logger.info("{} micro f1 result:{}".format(dataset_type, result))
 
             results[dataset_type] = result
@@ -500,10 +504,10 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
     if output_mode == "classification":
-        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
     elif output_mode == "regression":
-        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
-    all_word_ids = torch.tensor([f.word_ids for f in features], dtype=torch.float)
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+    all_word_ids = torch.tensor([f.word_ids for f in features], dtype=torch.long)
 
     dataset = TensorDataset(all_input_ids, all_input_mask, all_label_ids, all_word_ids)
     return dataset
@@ -641,8 +645,8 @@ class AdapterModel(nn.Module):
         # pooler_output = outputs[1]
         hidden_states = outputs[2]
         num = len(hidden_states)
-        # hidden_states_last = torch.zeros(sequence_output.size()).to("cuda")
-        hidden_states_last = torch.zeros(sequence_output.size()).to("cpu")
+        hidden_states_last = torch.zeros(sequence_output.size()).to("cuda")
+        # hidden_states_last = torch.zeros(sequence_output.size()).to("cpu")
 
         adapter_hidden_states = []
         adapter_hidden_states_count = 0
@@ -677,7 +681,7 @@ class NERModel(nn.Module):
             for p in self.fac_adapter.parameters():
                 p.requires_grad = False
         if args.freeze_adapter and (self.ner_adapter is not None):
-            for p in self.et_adapter.parameters():
+            for p in self.ner_adapter.parameters():
                 p.requires_grad = False
         if args.freeze_adapter and (self.lin_adapter is not None):
             for p in self.lin_adapter.parameters():
@@ -685,7 +689,7 @@ class NERModel(nn.Module):
         self.adapter_num = 0
         if self.fac_adapter is not None:
             self.adapter_num += 1
-        if self.et_adapter is not None:
+        if self.ner_adapter is not None:
             self.adapter_num += 1
         if self.lin_adapter is not None:
             self.adapter_num += 1
@@ -717,16 +721,16 @@ class NERModel(nn.Module):
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
         if self.fac_adapter is not None:
             fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
-        if self.et_adapter is not None:
-            et_adapter_outputs, _ = self.et_adapter(pretrained_model_outputs)
+        if self.ner_adapter is not None:
+            ner_adapter_outputs, _ = self.ner_adapter(pretrained_model_outputs)
         if self.lin_adapter is not None:
             lin_adapter_outputs, _ = self.lin_adapter(pretrained_model_outputs)
         if self.args.fusion_mode == "add":
             task_features = pretrained_model_last_hidden_states
             if self.fac_adapter is not None:
                 task_features = task_features + fac_adapter_outputs
-            if self.et_adapter is not None:
-                task_features = task_features + et_adapter_outputs
+            if self.ner_adapter is not None:
+                task_features = task_features + ner_adapter_outputs
             if self.lin_adapter is not None:
                 task_features = task_features + lin_adapter_outputs
         elif self.args.fusion_mode == "concat":
@@ -739,15 +743,22 @@ class NERModel(nn.Module):
 
         outputs = (logits,) + pretrained_model_outputs[2:]
         if labels is not None:
-            labels = torch.argmax(labels, dim=1)
-            if self.num_labels == 1:
-                #  We are doing regression
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.view(-1), labels.view(-1))
-            else:
-                # loss_fct = CrossEntropyLoss()
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels)
+
+            def loss_fn(logits, target):
+                lfn = torch.nn.CrossEntropyLoss()
+
+                # Filter representative tokens
+                active_logits = logits.view(-1, logits.shape[-1])
+                active_target = target.view(-1)
+
+                # Calculate loss
+                loss = lfn(active_logits, active_target)
+
+                return loss
+
+            # loss_fct = CrossEntropyLoss()
+            loss_fct = loss_fn
+            loss = loss_fct(logits, labels)
             outputs = (loss,) + outputs
 
         return outputs  # (loss), logits, (hidden_states), (attentions)
@@ -1024,7 +1035,7 @@ def main():
     # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     # model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
-    tokenizer = RobertaTokenizerFast.from_pretrained("roberta-large")
+    tokenizer = RobertaTokenizerFast.from_pretrained("roberta-large", add_prefix_space=True)
     pretrained_model = PretrainedModel(args)
     if args.meta_fac_adaptermodel:
         fac_adapter = AdapterModel(args, pretrained_model.config)

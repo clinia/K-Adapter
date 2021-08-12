@@ -145,8 +145,9 @@ class DataProcessor(object):
                     example.append(line.strip())
             return examples
 
+
 class NERProcessor(DataProcessor):
-        """Processor for the WNLI data set (GLUE version)."""
+    """Processor for the WNLI data set (GLUE version)."""
 
     def get_train_examples(self, data_dir, dataset_type=None):
         """See base class."""
@@ -160,23 +161,24 @@ class NERProcessor(DataProcessor):
 
     def get_labels(self):
         """See base class."""
-        return ["B-SPC", "B-SER", "B-BUS","I-SPC", "I-SER", "I-BUS", "O"]
+        return ["B-SPC", "B-SER", "B-BUS", "I-SPC", "I-SER", "I-BUS", "O"]
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training and dev sets."""
         examples = []
         # label_list = ['entity', 'location', 'time', 'organization', 'object', 'event', 'place', 'person', 'group']
-        label_list = ["B-SPC", "B-SER", "B-BUS","I-SPC", "I-SER", "I-BUS", "O"]
-        labels_to_id = {label:i for i, label in enumerate(label_list)}
+        label_list = ["B-SPC", "B-SER", "B-BUS", "I-SPC", "I-SER", "I-BUS", "O"]
+        labels_to_id = {label: i for i, label in enumerate(label_list)}
         for (i, line) in enumerate(lines):
             guid = i
             # text_a = line['sent']
             text_a = line["token"]
             text_b = None
             labels = [labels_to_id[line["labels"][j]] for j in range(len(line["labels"]))]
-            
+
             examples.append(InputExample(guid=guid, text_a=text_a, text_b=text_b, label=labels))
         return examples
+
 
 def convert_examples_to_features_ner(
     examples,
@@ -224,8 +226,8 @@ def convert_examples_to_features_ner(
             truncation="longest_first",
         )
 
-        input_ids = tokenization["input_ids"]
-        input_mask = tokenization["attention_mask"]
+        input_ids = tokenization["input_ids"].squeeze()
+        input_mask = tokenization["attention_mask"].squeeze()
         word_ids = tokenization.word_ids()
 
         previous_word_idx = None
@@ -245,18 +247,7 @@ def convert_examples_to_features_ner(
                 label_ids.append(labels[word_idx] if label_all_tokens else -100)
             previous_word_idx = word_idx
 
-        label_ids= torch.tensor(label_ids)
-
         word_ids = [word_id if word_id is not None else -1 for word_id in word_ids]
-
-
-        # try:
-        assert len(input_ids) == max_seq_length
-        assert len(input_mask) == max_seq_length
-        assert len(label_ids) == max_seq_length
-        # except AssertionError:
-        #     continue
-
 
         if ex_index < 5:
             logger.info("*** Example ***")
@@ -264,18 +255,26 @@ def convert_examples_to_features_ner(
             logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
             logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
             logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
-            logger.info("labels: %s" % " ".join([str(x) for x in word_ids]))
+            logger.info("word_ids: %s" % " ".join([str(x) for x in word_ids]))
             logger.info("labels: %s" % " ".join([str(x) for x in label_ids]))
+
+        # try:
+        assert len(input_ids.tolist()) == max_seq_length
+        assert len(input_mask.tolist()) == max_seq_length
+        assert len(label_ids) == max_seq_length
+        # except AssertionError:
+        #     continue
 
         features.append(
             NERInputFeatures(
-                input_ids=input_ids,
-                input_mask=input_mask,
+                input_ids=input_ids.tolist(),
+                input_mask=input_mask.tolist(),
                 label_id=label_ids,
-                word_ids = word_ids
+                word_ids=word_ids,
             )
         )
     return features
+
 
 class EntityTypeProcessor(DataProcessor):
     """Processor for the WNLI data set (GLUE version)."""
@@ -1011,7 +1010,7 @@ output_modes = {
     "entity_type": "classification",
     "tacred": "classification",
     "semeval": "classification",
-    "ner":"classification",
+    "ner": "classification",
 }
 
 GLUE_TASKS_NUM_LABELS = {
