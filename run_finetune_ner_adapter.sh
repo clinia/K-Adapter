@@ -17,13 +17,13 @@ python examples/run_finetune_ner.py \
     --per_gpu_train_batch_size=4   \
     --learning_rate=1e-4 \
     --gradient_accumulation_steps=1 \
-    --max_steps=18000  \
+    --max_steps=1 \
     --model_name=roberta-large  \
     --overwrite_output_dir   \
     --overwrite_cache \
     --warmup_steps=120 \
-    --restore '' \
-    --save_steps=10000 \
+    --restore 'yes' \
+    --save_steps=6000 \
     --freeze_bert="" \
     --freeze_adapter="True" \
     --adapter_size 768 \

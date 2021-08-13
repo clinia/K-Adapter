@@ -357,11 +357,14 @@ save_results = []
 def evaluate(args, model, tokenizer, prefix=""):
     pretrained_model = model[0]
     ner_model = model[1]
+
+    label_list = ["B-SPC", "B-SER", "B-BUS", "I-SPC", "I-SER", "I-BUS", "O"]
+    label_map = {label: i for i, label in enumerate(label_list)}
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_outputs_dirs = (args.output_dir, args.output_dir + "-MM") if args.task_name == "mnli" else (args.output_dir,)
     results = {}
-    for dataset_type in ["dev", "test"]:
+    for dataset_type in ["test", "dev"]:
 
         for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
 
@@ -428,10 +431,12 @@ def evaluate(args, model, tokenizer, prefix=""):
                     all_targets.extend(targets)
 
             eval_loss = eval_loss / nb_eval_steps
-            accuracy = accuracy_score(all_preds, all_targets)
-            precision_scores = precision_score(all_targets, all_preds)
-            recall_scores = recall_score(all_targets, all_preds)
-            f1_scores = f1_score(all_targets, all_preds)
+            accuracy = accuracy_score(all_targets, all_preds)
+            precision_scores = precision_score(all_targets, all_preds, average=None)
+            recall_scores = recall_score(all_targets, all_preds, average=None)
+            f1_scores = f1_score(all_targets, all_preds, average=None)
+
+            logger.info("Label map:{}".format(label_map))
 
             logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
             logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
@@ -474,9 +479,6 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
         label_list = processor.get_labels()
-        if task in ["mnli", "mnli-mm"] and args.model_type in ["roberta"]:
-            # HACK(label indices are swapped in RoBERTa pretrained model)
-            label_list[1], label_list[2] = label_list[2], label_list[1]
         examples = (
             processor.get_dev_examples(args.data_dir, dataset_type)
             if evaluate

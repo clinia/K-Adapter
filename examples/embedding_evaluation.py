@@ -66,13 +66,8 @@ class EvalKBERTEMbeddings(EvaluateEmbeddings):
 
             ent_emb.append(torch.stack(ent_emb_i))
 
-        pca = PCA(n_components=5)
-        pca.fit(np.concatenate(ent_emb, axis=0))
-        new_emb_0 = torch.tensor(pca.transform(ent_emb[0]))
-        new_emb_1 = torch.tensor(pca.transform(ent_emb[1]))
-
-        # return ent_emb[0], ent_emb[1]
-        return new_emb_0, new_emb_1
+        return ent_emb[0], ent_emb[1]
+        # return new_emb_0, new_emb_1
 
 
 def set_seed(args):

@@ -3,7 +3,7 @@
 
 python examples/embedding_evaluation.py \
     --config_name roberta-large \
-    --pretrained_model_path "et_output/entity_type_batch-4_lr-0.0001_warmup-120_epoch-3.0_combine-adapter-trf/pytorch_model.bin" \
+    --pretrained_model_path "ner_output/ner_batch-4_lr-0.0001_warmup-120_epoch-3.0_combine-adapter-trf/checkpoint-12000/pytorch_model.bin" \
     --data_dir=data/ner_data/et_data \
     --output_dir=./et_output  \
     --comment 'combine-adapter-trf' \
