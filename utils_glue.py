@@ -640,6 +640,7 @@ trex_relations = [
     "technical act",
     "medical documents",
     "prescription",
+    "product",
 ]
 
 

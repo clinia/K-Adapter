@@ -32,6 +32,7 @@ sacremoses = "^0.0.45"
 regex = "^2021.7.6"
 requests = "^2.26.0"
 tensorboardX = "^2.4"
+ipykernel = "^6.4.1"
 
 
 [tool.poetry.dev-dependencies]

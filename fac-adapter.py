@@ -622,26 +622,52 @@ def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False)
     return dataset
 
 
-def main():
+class KAdapterArgs(object):
+    def __init__(self) -> None:
+
+        self.model_type = "roberta"
+        self.model_name = "roberta-large"
+        # self.model_name_or_path =
+        self.data_dir = "./data/ner_data/rc_data"
+        self.output_dir = "trex_output"
+        self.restore = True
+        self.do_train = True
+        self.do_eval = True
+        self.evaluate_during_training = True
+        self.task_name = "trex"
+        self.comment = "fac-adapter"
+        self.per_gpu_train_batch_size = 32
+        self.per_gpu_eval_batch_size = 64
+        self.num_train_epochs = 5
+        self.max_seq_lengt = 64
+        self.gradient_accumulation_steps = 1
+        self.learning_rate = 5e-5
+        self.warmup_steps = 1200
+        self.save_steps = 1000
+        self.adapter_size = 768
+        self.adapter_list = "0,11,22"
+        self.adapter_skip_layers = 0
+        self.adapter_transformer_layers = 2
+        self.meta_adapter_model = ""
+        self.max_seq_length = 256
+
+
+def main(special_args=None):
     parser = ArgumentParser()
     parser.add_argument(
         "--data_dir",
         default=None,
         type=str,
-        required=True,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
-    parser.add_argument(
-        "--model_type", default="roberta", type=str, required=True, help="Model type selected in the list"
-    )
+    parser.add_argument("--model_type", default="roberta", type=str, help="Model type selected in the list")
     parser.add_argument(
         "--model_name_or_path",
         default="roberta-large",
         type=str,
-        required=True,
         help="Path to pre-trained model or shortcut name selected in the list: ",
     )
-    parser.add_argument("--task_name", default=None, type=str, required=True, help="The name of the task to train.")
+    parser.add_argument("--task_name", default=None, type=str, help="The name of the task to train.")
     parser.add_argument("--comment", default="", type=str, help="The comment")
     parser.add_argument("--output_dir", type=Path, default="output")
 
@@ -740,7 +766,35 @@ def main():
     parser.add_argument("--negative_sample", type=int, default=0, help="how many negative samples to select")
 
     # args
+
     args = parser.parse_args()
+
+    if special_args is not None:
+        args.model_type = special_args.model_type
+        args.model_name = special_args.model_name
+        # args.model_name_or_path = special_args
+        args.data_dir = special_args.data_dir
+        args.output_dir = special_args.output_dir
+        args.restore = special_args.restore
+        args.do_train = special_args.do_train
+        args.do_eval = special_args.do_eval
+        args.evaluate_during_training = special_args.evaluate_during_training
+        args.task_name = special_args.task_name
+        args.comment = special_args.comment
+        args.per_gpu_train_batch_size = special_args.per_gpu_train_batch_size
+        args.per_gpu_eval_batch_size = special_args.per_gpu_eval_batch_size
+        args.num_train_epochs = special_args.num_train_epochs
+        args.max_seq_lengt = special_args.max_seq_lengt
+        args.gradient_accumulation_steps = special_args.gradient_accumulation_steps
+        args.learning_rate = special_args.learning_rate
+        args.warmup_steps = special_args.warmup_steps
+        args.save_steps = special_args.save_steps
+        args.adapter_size = special_args.adapter_size
+        args.adapter_list = special_args.adapter_list
+        args.adapter_skip_layers = special_args.adapter_skip_layers
+        args.adapter_transformer_layers = special_args.adapter_transformer_layers
+        args.meta_adapter_model = special_args.meta_adapter_model
+        args.max_seq_length = special_args.max_seq_length
 
     args.adapter_list = args.adapter_list.split(",")
     args.adapter_list = [int(i) for i in args.adapter_list]
@@ -873,4 +927,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = KAdapterArgs()
+    main(special_args=args)
