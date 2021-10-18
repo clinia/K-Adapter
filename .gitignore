@@ -3,6 +3,7 @@
 /pretrained_models
 /proc_data
 /pytorch_transformers/__pycache__
+__pycache__/*
 /.vscode
 /trex_output
 /mlm_output
@@ -10,3 +11,4 @@
 /et_output
 /et_output_no_pretraining
 /ner_output
+/output_data
