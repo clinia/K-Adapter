@@ -31,7 +31,6 @@ import numpy as np
 import torch
 from transformers import RobertaTokenizer
 
-from tokenize_sentences import tokenize_sentence
 
 logger = logging.getLogger(__name__)
 
