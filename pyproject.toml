@@ -43,6 +43,7 @@ flake8 = "^3.9.1"
 pre-commit = "^2.12.1"
 pre-commit-hooks = "^3.4.0"
 pynvml = "^8.0.4"
+search-utils = { git = "https://github.com/clinia/search-utils.git", branch = "SEAR-849" }
 
 [[tool.poetry.source]]
 name = "clinia"
