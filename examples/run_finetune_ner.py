@@ -63,8 +63,7 @@ from pytorch_transformers import (
 )
 from pytorch_transformers.modeling_roberta import gelu
 from pytorch_transformers.my_modeling_roberta import RobertaForEntityTyping
-from utils_glue import (
-    compute_metrics,
+from examples.utils_glue import (
     convert_examples_to_features_ner,
     output_modes,
     processors,
@@ -247,9 +246,7 @@ def train(args, train_dataset, model, tokenizer):
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
-            # if step>10:
-            #     break
-            # model.train()
+
             if args.freeze_bert:
                 pretrained_model.eval()
             else:
@@ -262,7 +259,7 @@ def train(args, train_dataset, model, tokenizer):
                 "labels": batch[2],
                 "word_ids": batch[3],
             }
-            # outputs = model(**inputs)
+
             pretrained_model_outputs = pretrained_model(**inputs)
             outputs = ner_model(pretrained_model_outputs, **inputs)
 
@@ -297,31 +294,27 @@ def train(args, train_dataset, model, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     # Log metrics
-                    # if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
-                    # results = evaluate(args, model, tokenizer)
-                    # for key, value in results.items():
-                    #     tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
-                    # tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
-                    # tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
+                    tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
+                    tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     # Save model checkpoint
-                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    model_to_save = (
-                        ner_model.module if hasattr(ner_model, "module") else ner_model
-                    )  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
-                    model_to_save = (
-                        pretrained_model.module if hasattr(pretrained_model, "module") else pretrained_model
-                    )  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
-                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                    save_model(args, global_step, ner_model, pretrained_model)
 
-                    torch.save(global_step, os.path.join(args.output_dir, "global_step.bin"))
-                    logger.info("Saving model checkpoint to %s", output_dir)
+                if (
+                    args.local_rank == -1 and args.evaluate_during_training and global_step % args.eval_steps == 0
+                ):  # Only evaluate when single GPU otherwise metrics may not average well
+                    results = evaluate(args, model, tokenizer)
+
+                    # Save model if it has improved
+                    if prev_eval_loss > results["loss"]:
+                        prev_eval_loss = results["loss"]
+                        save_model(args, "best-model", ner_model, pretrained_model)
+
+                    # Add to writer
+                    for key, value in results.items():
+                        tb_writer.add_scalar("eval_{}".format(key), value, global_step)
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
@@ -329,6 +322,9 @@ def train(args, train_dataset, model, tokenizer):
                 model = (pretrained_model, ner_model)
 
                 results = evaluate(args, model, tokenizer, prefix="")
+
+                for key, value in results.items():
+                    tb_writer.add_scalar("eval_{}".format(key), value, global_step)
                 break
 
         if args.max_steps > 0 and global_step > args.max_steps:
@@ -337,11 +333,14 @@ def train(args, train_dataset, model, tokenizer):
             model = (pretrained_model, ner_model)
 
             results = evaluate(args, model, tokenizer, prefix="")
-            break
-        model = (pretrained_model, ner_model)
-        logger.info("***** evaluating *****")
 
-        results = evaluate(args, model, tokenizer, prefix="")
+            for key, value in results.items():
+                tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+            break
+        # model = (pretrained_model, ner_model)
+        # logger.info("***** evaluating *****")
+
+        # results = evaluate(args, model, tokenizer, prefix="")
         # for key, value in results.items():
         #     tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
     #
@@ -354,81 +353,78 @@ def train(args, train_dataset, model, tokenizer):
 save_results = []
 
 
-def evaluate(args, model, tokenizer, prefix=""):
+def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
     pretrained_model = model[0]
     ner_model = model[1]
 
-    label_list = ["B-SPC", "B-SER", "B-BUS", "I-SPC", "I-SER", "I-BUS", "O"]
-    label_map = {label: i for i, label in enumerate(label_list)}
+    label_list = ["B-ONT", "B-BUS", "I-ONT", "I-BUS", "O"]
+    # label_map = {label: i for i, label in enumerate(label_list)}
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_outputs_dirs = (args.output_dir, args.output_dir + "-MM") if args.task_name == "mnli" else (args.output_dir,)
     results = {}
-    for dataset_type in ["test", "dev"]:
 
-        for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
+    for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
 
-            eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, dataset_type, evaluate=True)
+        eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, dataset_type, evaluate=True)
 
-            if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
-                os.makedirs(eval_output_dir)
+        if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
+            os.makedirs(eval_output_dir)
 
-            args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-            # Note that DistributedSampler samples randomly
-            eval_sampler = (
-                SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
-            )
-            eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
+        args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+        # Note that DistributedSampler samples randomly
+        eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
+        eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
-            # Eval!
-            logger.info("***** Running evaluation {} *****".format(prefix))
-            logger.info("  Num examples = %d", len(eval_dataset))
-            logger.info("  Batch size = %d", args.eval_batch_size)
-            eval_loss = 0.0
-            nb_eval_steps = 0
-            all_preds = []
-            all_targets = []
-            out_label_ids = None
-            eval_acc = 0
-            index = 0
-            for batch in tqdm(eval_dataloader, desc="Evaluating"):
-                pretrained_model.eval()
-                ner_model.eval()
-                # model.eval()
-                index += 1
-                # if index>10:
-                #     break
-                batch = tuple(t.to(args.device) for t in batch)
-                with torch.no_grad():
-                    inputs = {
-                        "input_ids": batch[0],
-                        "attention_mask": batch[1],
-                        "labels": batch[2],
-                        "word_ids": batch[3],
-                    }
-                    # outputs = model(**inputs)
-                    pretrained_model_outputs = pretrained_model(**inputs)
-                    outputs = ner_model(pretrained_model_outputs, **inputs)
-                    tmp_eval_loss, logits = outputs[:2]
+        # Eval!
+        logger.info("***** Running evaluation {} *****".format(prefix))
+        logger.info("  Num examples = %d", len(eval_dataset))
+        logger.info("  Batch size = %d", args.eval_batch_size)
+        eval_loss = 0.0
+        nb_eval_steps = 0
+        all_preds = []
+        all_targets = []
+        out_label_ids = None
+        eval_acc = 0
+        index = 0
+        for batch in tqdm(eval_dataloader, desc="Evaluating"):
+            pretrained_model.eval()
+            ner_model.eval()
+            # model.eval()
+            index += 1
+            # if index>10:
+            #     break
+            batch = tuple(t.to(args.device) for t in batch)
+            with torch.no_grad():
+                inputs = {
+                    "input_ids": batch[0],
+                    "attention_mask": batch[1],
+                    "labels": batch[2],
+                    "word_ids": batch[3],
+                }
+                # outputs = model(**inputs)
+                pretrained_model_outputs = pretrained_model(**inputs)
+                outputs = ner_model(pretrained_model_outputs, **inputs)
+                tmp_eval_loss, logits = outputs[:2]
 
-                    eval_loss += tmp_eval_loss.mean().item()
-                nb_eval_steps += 1
-                # logits has shape (bs, seq_len, num_labels)
-                logits_batch = logits
-                word_ids_batch = inputs["word_ids"]
-                targets_batch = inputs["labels"]
-                for logits, word_ids, targets in zip(logits_batch, word_ids_batch, targets_batch):
-                    mask = word_ids != -1
-                    logits = logits[mask]
-                    targets = targets[mask]
-                    # now i have vectors of various length
-                    preds = torch.argmax(logits, dim=-1)
+                eval_loss += tmp_eval_loss.mean().item()
+            nb_eval_steps += 1
+            # logits has shape (bs, seq_len, num_labels)
+            logits_batch = logits
+            word_ids_batch = inputs["word_ids"]
+            targets_batch = inputs["labels"]
+            for logits, word_ids, targets in zip(logits_batch, word_ids_batch, targets_batch):
+                mask = word_ids != -1
+                logits = logits[mask]
+                targets = targets[mask]
+                # now i have vectors of various length
+                preds = torch.argmax(logits, dim=-1)
 
-                    preds = preds.tolist()
-                    targets = targets.tolist()
+                preds = preds.tolist()
+                targets = targets.tolist()
 
-                    all_preds.extend(preds)
-                    all_targets.extend(targets)
+                all_preds.extend(preds)
+                all_targets.extend(targets)
 
             eval_loss = eval_loss / nb_eval_steps
             accuracy = accuracy_score(all_targets, all_preds)
@@ -436,7 +432,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             recall_scores = recall_score(all_targets, all_preds, average=None)
             f1_scores = f1_score(all_targets, all_preds, average=None)
 
-            logger.info("Label map:{}".format(label_map))
+            # logger.info("Label map:{}".format(label_map))
 
             logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
             logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
@@ -785,6 +781,24 @@ class NERModel(nn.Module):
         logger.info("Saving model checkpoint to %s", save_directory)
 
 
+def save_model(args, global_step, ner_model, pretrained_model):
+    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    model_to_save = (
+        ner_model.module if hasattr(ner_model, "module") else ner_model
+    )  # Take care of distributed/parallel training
+    model_to_save.save_pretrained(output_dir)
+    model_to_save = (
+        pretrained_model.module if hasattr(pretrained_model, "module") else pretrained_model
+    )  # Take care of distributed/parallel training
+    model_to_save.save_pretrained(output_dir)
+    torch.save(args, os.path.join(output_dir, "training_args.bin"))
+
+    torch.save(global_step, os.path.join(args.output_dir, "global_step.bin"))
+    logger.info("Saving model checkpoint to %s", output_dir)
+
+
 def load_pretrained_adapter(adapter, adapter_path):
     new_adapter = adapter
     model_dict = new_adapter.state_dict()
@@ -808,7 +822,41 @@ def load_pretrained_adapter(adapter, adapter_path):
     return new_adapter
 
 
-def main():
+class FinetuneKAdapterArgs(object):
+    def __init__(self) -> None:
+
+        self.model_type = "roberta"
+        self.model_name = "roberta-large"
+        self.model_name_or_path = "roberta-large"
+        self.data_dir = "./data/ner_data/finetuning"
+        self.output_dir = "ner_output"
+        self.restore = True
+        self.do_train = True
+        self.do_eval = True
+        self.evaluate_during_training = True
+        self.task_name = "ner"
+        self.comment = "fac-adapter"
+        self.per_gpu_train_batch_size = 32
+        self.per_gpu_eval_batch_size = 64
+        self.num_train_epochs = 4
+        self.max_seq_lengt = 64
+        self.gradient_accumulation_steps = 1
+        self.learning_rate = 5e-5
+        self.warmup_steps = 100
+        self.save_steps = 1e8
+        self.eval_steps = 50
+        self.adapter_size = 768
+        self.adapter_list = "0,11,22"
+        self.adapter_skip_layers = 0
+        self.adapter_transformer_layers = 2
+        self.meta_adapter_model = ""
+        self.max_seq_length = 256
+        self.no_cuda = False
+        self.fusion_mode = "concat"  # "add"
+        self.meta_fac_adaptermodel = "output_data/custom_maxlen-256_batch-32_lr-5e-05_warmup-1200_epoch-8_fac-adapter/checkpoint-best-model/pytorch_model.bin"
+
+
+def main(special_args=None):
     parser = argparse.ArgumentParser()
 
     ## Required parameters
@@ -816,28 +864,24 @@ def main():
         "--data_dir",
         default=None,
         type=str,
-        required=True,
         help="The input data dir. Should contain the .tsv files (or other data files) for the task.",
     )
     parser.add_argument(
         "--model_type",
         default=None,
         type=str,
-        required=True,
         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()),
     )
     parser.add_argument(
         "--model_name_or_path",
         default=None,
         type=str,
-        required=True,
         help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS),
     )
     parser.add_argument(
         "--task_name",
         default=None,
         type=str,
-        required=True,
         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()),
     )
     parser.add_argument("--comment", default="", type=str, help="The comment")
@@ -845,7 +889,6 @@ def main():
         "--output_dir",
         default=None,
         type=str,
-        required=True,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
 
@@ -861,10 +904,10 @@ def main():
         help="the fusion mode for bert feautre and adapter feature |add|concat",
     )
     parser.add_argument("--adapter_transformer_layers", default=2, type=int, help="The transformer layers of adapter.")
-    parser.add_argument("--adapter_size", default=768, type=int, help="The hidden size of adapter.")
-    parser.add_argument("--adapter_list", default="0,11,22", type=str, help="The layer where add an adapter")
+    parser.add_argument("--adapter_size", default=128, type=int, help="The hidden size of adapter.")
+    parser.add_argument("--adapter_list", default="0,11,23", type=str, help="The layer where add an adapter")
     parser.add_argument(
-        "--adapter_skip_layers", default=3, type=int, help="The skip_layers of adapter according to bert layers"
+        "--adapter_skip_layers", default=6, type=int, help="The skip_layers of adapter according to bert layers"
     )
 
     parser.add_argument("--meta_fac_adaptermodel", default="", type=str, help="the pretrained factual adapter model")
@@ -885,7 +928,7 @@ def main():
     )
     parser.add_argument(
         "--max_seq_length",
-        default=128,
+        default=256,
         type=int,
         help="The maximum total input sequence length after tokenization. Sequences longer "
         "than this will be truncated, sequences shorter will be padded.",
@@ -897,8 +940,10 @@ def main():
     )
     parser.add_argument("--do_lower_case", action="store_true", help="Set this flag if you are using an uncased model.")
 
-    parser.add_argument("--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--per_gpu_eval_batch_size", default=8, type=int, help="Batch size per GPU/CPU for evaluation.")
+    parser.add_argument("--per_gpu_train_batch_size", default=32, type=int, help="Batch size per GPU/CPU for training.")
+    parser.add_argument(
+        "--per_gpu_eval_batch_size", default=64, type=int, help="Batch size per GPU/CPU for evaluation."
+    )
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -922,6 +967,7 @@ def main():
 
     parser.add_argument("--logging_steps", type=int, default=10, help="Log every X updates steps.")
     parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--eval_steps", type=int, default=None, help="eval every X updates steps.")
     parser.add_argument(
         "--eval_all_checkpoints",
         action="store_true",
@@ -961,6 +1007,37 @@ def main():
     parser.add_argument("--meta_bertmodel", default="", type=str, help="the pretrained bert model")
     parser.add_argument("--save_model_iteration", type=int, help="when to save the model..")
     args = parser.parse_args()
+
+    if special_args is not None:
+        args.model_type = special_args.model_type
+        args.model_name = special_args.model_name
+        args.model_name_or_path = special_args.model_name_or_path
+        args.data_dir = special_args.data_dir
+        args.output_dir = special_args.output_dir
+        args.restore = special_args.restore
+        args.do_train = special_args.do_train
+        args.do_eval = special_args.do_eval
+        args.evaluate_during_training = special_args.evaluate_during_training
+        args.task_name = special_args.task_name
+        args.comment = special_args.comment
+        args.per_gpu_train_batch_size = special_args.per_gpu_train_batch_size
+        args.per_gpu_eval_batch_size = special_args.per_gpu_eval_batch_size
+        args.num_train_epochs = special_args.num_train_epochs
+        args.max_seq_lengt = special_args.max_seq_lengt
+        args.gradient_accumulation_steps = special_args.gradient_accumulation_steps
+        args.learning_rate = special_args.learning_rate
+        args.warmup_steps = special_args.warmup_steps
+        args.save_steps = special_args.save_steps
+        args.eval_steps = special_args.eval_steps
+        args.adapter_size = special_args.adapter_size
+        args.adapter_list = special_args.adapter_list
+        args.adapter_skip_layers = special_args.adapter_skip_layers
+        args.adapter_transformer_layers = special_args.adapter_transformer_layers
+        args.meta_adapter_model = special_args.meta_adapter_model
+        args.max_seq_length = special_args.max_seq_length
+        args.no_cuda = special_args.no_cuda
+        args.fusion_mode = special_args.fusion_mode
+        args.meta_fac_adaptermodel = special_args.meta_fac_adaptermodel
 
     args.adapter_list = args.adapter_list.split(",")
     args.adapter_list = [int(i) for i in args.adapter_list]
@@ -1124,31 +1201,26 @@ def main():
 
     # # Evaluation
     results = {}
-    # if args.do_eval and args.local_rank in [-1, 0]:
-    #     tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-    #     checkpoints = [args.output_dir]
-    #     if args.eval_all_checkpoints:
-    #         checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + '/**/' + WEIGHTS_NAME, recursive=True)))
-    #         logging.getLogger("pytorch_transformers.modeling_utils").setLevel(logging.WARN)  # Reduce logging
-    #     logger.info("Evaluate the following checkpoints: %s", checkpoints)
-    #     for checkpoint in checkpoints:
-    #         global_step = checkpoint.split('-')[-1] if len(checkpoints) > 1 else ""
-    #         model = model_class.from_pretrained(checkpoint)
-    #         model.to(args.device)
-    #         result = evaluate(args, model, tokenizer, prefix=global_step)
-    #         logger.info('micro f1:{}'.format(result))
-    #         result = dict((k + '_{}'.format(global_step), v) for k, v in result.items())
-    #         results.update(result)
-    # save_result = str(results)
-    # save_results.append(save_result)
-    #
-    # result_file = open(os.path.join(args.output_dir, args.my_model_name + '_result.txt'), 'w')
-    # for line in save_results:
-    #     result_file.write(str(line) + '\n')
-    # result_file.close()
+    if args.do_eval and args.local_rank in [-1, 0]:
+        tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        checkpoint = os.path.join(args.output_dir, "checkpoint-best-model")
+        model = model_class.from_pretrained(checkpoint)
+        model.to(args.device)
+        result = evaluate(args, model, tokenizer, dataset_type="test", prefix="best-model")
+        logger.info("micro f1:{}".format(result))
+        result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
+        results.update(result)
+    save_result = str(results)
+    save_results.append(save_result)
+
+    result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
+    for line in save_results:
+        result_file.write(str(line) + "\n")
+    result_file.close()
 
     # return results
 
 
 if __name__ == "__main__":
-    main()
+    arg = FinetuneKAdapterArgs()
+    main(special_args=arg)

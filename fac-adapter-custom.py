@@ -171,6 +171,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
 
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
+    prev_eval_loss = 1e8
     for epoch in range(start_epoch, int(args.num_train_epochs)):
         for step, batch in enumerate(train_dataloader):
             start = time.time()
@@ -231,35 +232,20 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     # Save model checkpoint
-                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    model_to_save = (
-                        adapter_model.module if hasattr(adapter_model, "module") else adapter_model
-                    )  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)  # save to pytorch_model.bin  model.state_dict()
+                    save_model(args, global_step, adapter_model, optimizer, scheduler)
 
-                    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.bin"))
-                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.bin"))
-                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                    torch.save(global_step, os.path.join(args.output_dir, "global_step.bin"))
-
-                    logger.info("Saving model checkpoint, optimizer, global_step to %s", output_dir)
-                    if (global_step / args.save_steps) > args.max_save_checkpoints:
-                        try:
-                            shutil.rmtree(
-                                os.path.join(
-                                    args.output_dir,
-                                    "checkpoint-{}".format(global_step - args.max_save_checkpoints * args.save_steps),
-                                )
-                            )
-                        except OSError as e:
-                            print(e)
                 if (
                     args.local_rank == -1 and args.evaluate_during_training and global_step % args.eval_steps == 0
                 ):  # Only evaluate when single GPU otherwise metrics may not average well
                     model = (pretrained_model, adapter_model)
                     results = evaluate(args, val_dataset, model, tokenizer)
+
+                    # Save model if it has improved
+                    if prev_eval_loss > results["loss"]:
+                        prev_eval_loss = results["loss"]
+                        save_model(args, "best-model", adapter_model, optimizer, scheduler)
+
+                    # Add to writer
                     for key, value in results.items():
                         tb_writer.add_scalar("eval_{}".format(key), value, global_step)
             if args.max_steps > 0 and global_step > args.max_steps:
@@ -537,6 +523,23 @@ class AdapterModel(nn.Module):
         logger.info("Saving model checkpoint to %s", save_directory)
 
 
+def save_model(args, global_step, adapter_model, optimizer, scheduler):
+    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    model_to_save = (
+        adapter_model.module if hasattr(adapter_model, "module") else adapter_model
+    )  # Take care of distributed/parallel training
+    model_to_save.save_pretrained(output_dir)  # save to pytorch_model.bin  model.state_dict()
+
+    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.bin"))
+    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.bin"))
+    torch.save(args, os.path.join(output_dir, "training_args.bin"))
+    torch.save(global_step, os.path.join(args.output_dir, "global_step.bin"))
+
+    logger.info("Saving model checkpoint, optimizer, global_step to %s", output_dir)
+
+
 def load_and_cache_examples(args, task, tokenizer, dataset_type, evaluate=False):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
@@ -616,7 +619,7 @@ class KAdapterArgs(object):
 
         self.model_type = "roberta"
         self.model_name = "roberta-large"
-        # self.model_name_or_path =
+        self.model_name_or_path = "roberta-large"
         self.data_dir = "./data/graph_data/rc_data"
         self.output_dir = "output_data"
         self.restore = True
@@ -627,12 +630,12 @@ class KAdapterArgs(object):
         self.comment = "fac-adapter"
         self.per_gpu_train_batch_size = 32
         self.per_gpu_eval_batch_size = 64
-        self.num_train_epochs = 5
+        self.num_train_epochs = 8
         self.max_seq_lengt = 64
         self.gradient_accumulation_steps = 1
         self.learning_rate = 5e-5
-        self.warmup_steps = 1200
-        self.save_steps = 100
+        self.warmup_steps = 100
+        self.save_steps = 1e8
         self.eval_steps = 50
         self.adapter_size = 768
         self.adapter_list = "0,11,22"
@@ -717,7 +720,7 @@ def main(special_args=None):
         default=10,
         help="How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)",
     )
-    parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=100, help="Save checkpoint every X updates steps.")
     parser.add_argument("--eval_steps", type=int, default=None, help="eval every X updates steps.")
     parser.add_argument(
         "--max_save_checkpoints",
@@ -763,7 +766,7 @@ def main(special_args=None):
     if special_args is not None:
         args.model_type = special_args.model_type
         args.model_name = special_args.model_name
-        # args.model_name_or_path = special_args
+        args.model_name_or_path = special_args.model_name_or_path
         args.data_dir = special_args.data_dir
         args.output_dir = special_args.output_dir
         args.restore = special_args.restore
@@ -812,6 +815,8 @@ def main(special_args=None):
     )
     args.my_model_name = args.task_name + "_" + name_prefix
     args.output_dir = os.path.join(args.output_dir, args.my_model_name)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     if args.eval_steps is None:
         args.eval_steps = args.save_steps * 10
