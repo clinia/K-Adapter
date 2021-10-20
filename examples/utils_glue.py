@@ -161,13 +161,13 @@ class NERProcessor(DataProcessor):
 
     def get_labels(self):
         """See base class."""
-        return ["B-ONT", "B-BUS", "I-ONT", "I-BUS", "O"]
+        return ["B-ONT", "B-BUS", "B-RES", "I-ONT", "I-BUS", "I-RES", "O"]
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training and dev sets."""
         examples = []
         # label_list = ['entity', 'location', 'time', 'organization', 'object', 'event', 'place', 'person', 'group']
-        label_list = ["B-ONT", "B-BUS", "I-ONT", "I-BUS", "O"]
+        label_list = self.get_labels()
         labels_to_id = {label: i for i, label in enumerate(label_list)}
         for (i, line) in enumerate(lines):
             guid = i

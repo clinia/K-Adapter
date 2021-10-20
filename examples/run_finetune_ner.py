@@ -261,7 +261,8 @@ def train(args, train_dataset, model, tokenizer):
             }
 
             pretrained_model_outputs = pretrained_model(**inputs)
-            outputs = ner_model(pretrained_model_outputs, **inputs)
+            outputs = ner_model(pretrained_model_outputs, input_ids=inputs["input_ids"], labels=inputs["labels"])
+            # ner_model(pretrained_model_outputs, **inputs)
 
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
 
@@ -294,7 +295,7 @@ def train(args, train_dataset, model, tokenizer):
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     # Log metrics
-                    tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
+                    tb_writer.add_scalar("lr", scheduler.get_last_lr()[0], global_step)
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
 
@@ -357,7 +358,7 @@ def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
     pretrained_model = model[0]
     ner_model = model[1]
 
-    label_list = ["B-ONT", "B-BUS", "I-ONT", "I-BUS", "O"]
+    label_list = ["B-ONT", "B-BUS", "B-RES", "I-ONT", "I-BUS", "I-RES", "O"]
     # label_map = {label: i for i, label in enumerate(label_list)}
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
@@ -386,16 +387,12 @@ def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
         all_targets = []
         out_label_ids = None
         eval_acc = 0
-        index = 0
-        for batch in tqdm(eval_dataloader, desc="Evaluating"):
-            pretrained_model.eval()
-            ner_model.eval()
-            # model.eval()
-            index += 1
-            # if index>10:
-            #     break
-            batch = tuple(t.to(args.device) for t in batch)
-            with torch.no_grad():
+        with torch.no_grad():
+            for batch in tqdm(eval_dataloader, desc="Evaluating"):
+                pretrained_model.eval()
+                ner_model.eval()
+                # model.eval()
+                batch = tuple(t.to(args.device) for t in batch)
                 inputs = {
                     "input_ids": batch[0],
                     "attention_mask": batch[1],
@@ -408,47 +405,47 @@ def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
                 tmp_eval_loss, logits = outputs[:2]
 
                 eval_loss += tmp_eval_loss.mean().item()
-            nb_eval_steps += 1
-            # logits has shape (bs, seq_len, num_labels)
-            logits_batch = logits
-            word_ids_batch = inputs["word_ids"]
-            targets_batch = inputs["labels"]
-            for logits, word_ids, targets in zip(logits_batch, word_ids_batch, targets_batch):
-                mask = word_ids != -1
-                logits = logits[mask]
-                targets = targets[mask]
-                # now i have vectors of various length
-                preds = torch.argmax(logits, dim=-1)
+                nb_eval_steps += 1
+                # logits has shape (bs, seq_len, num_labels)
+                logits_batch = logits
+                word_ids_batch = inputs["word_ids"]
+                targets_batch = inputs["labels"]
+                for logits, word_ids, targets in zip(logits_batch, word_ids_batch, targets_batch):
+                    mask = word_ids != -1
+                    logits = logits[mask]
+                    targets = targets[mask]
+                    # now i have vectors of various length
+                    preds = torch.argmax(logits, dim=-1)
 
-                preds = preds.tolist()
-                targets = targets.tolist()
+                    preds = preds.tolist()
+                    targets = targets.tolist()
 
-                all_preds.extend(preds)
-                all_targets.extend(targets)
+                    all_preds.extend(preds)
+                    all_targets.extend(targets)
 
-            eval_loss = eval_loss / nb_eval_steps
-            accuracy = accuracy_score(all_targets, all_preds)
-            precision_scores = precision_score(all_targets, all_preds, average=None)
-            recall_scores = recall_score(all_targets, all_preds, average=None)
-            f1_scores = f1_score(all_targets, all_preds, average=None)
+                eval_loss = eval_loss / nb_eval_steps
+                accuracy = accuracy_score(all_targets, all_preds)
+                precision_scores = precision_score(all_targets, all_preds, average=None)
+                recall_scores = recall_score(all_targets, all_preds, average=None)
+                f1_scores = f1_score(all_targets, all_preds, average=None)
 
-            # logger.info("Label map:{}".format(label_map))
+                # logger.info("Label map:{}".format(label_map))
+                if args.logging_steps > 0 and nb_eval_steps % args.logging_steps == 0:
+                    logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
+                    logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
+                    logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
+                    logger.info("{} accuracy:{}".format(dataset_type, accuracy))
 
-            logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
-            logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
-            logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
-            logger.info("{} accuracy:{}".format(dataset_type, accuracy))
+                result = {"f1": f1_scores, "prec": precision_scores, "recall": recall_scores, "acc": accuracy}
 
-            result = {"f1": f1_scores, "prec": precision_scores, "recall": recall_scores, "acc": accuracy}
+                results[dataset_type] = result
+                save_result = str(results)
 
-            results[dataset_type] = result
-            save_result = str(results)
-
-            save_results.append(save_result)
-            result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
-            for line in save_results:
-                result_file.write(str(dataset_type) + ":" + str(line) + "\n")
-            result_file.close()
+                save_results.append(save_result)
+                result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
+                for line in save_results:
+                    result_file.write(str(dataset_type) + ":" + str(line) + "\n")
+                result_file.close()
     return results
 
 
@@ -684,19 +681,19 @@ class NERModel(nn.Module):
         if args.freeze_adapter and (self.fac_adapter is not None):
             for p in self.fac_adapter.parameters():
                 p.requires_grad = False
-        if args.freeze_adapter and (self.ner_adapter is not None):
-            for p in self.ner_adapter.parameters():
-                p.requires_grad = False
-        if args.freeze_adapter and (self.lin_adapter is not None):
-            for p in self.lin_adapter.parameters():
-                p.requires_grad = False
+        # if args.freeze_adapter and (self.ner_adapter is not None):
+        #     for p in self.ner_adapter.parameters():
+        #         p.requires_grad = False
+        # if args.freeze_adapter and (self.lin_adapter is not None):
+        #     for p in self.lin_adapter.parameters():
+        #         p.requires_grad = False
         self.adapter_num = 0
         if self.fac_adapter is not None:
             self.adapter_num += 1
-        if self.ner_adapter is not None:
-            self.adapter_num += 1
-        if self.lin_adapter is not None:
-            self.adapter_num += 1
+        # if self.ner_adapter is not None:
+        #     self.adapter_num += 1
+        # if self.lin_adapter is not None:
+        #     self.adapter_num += 1
 
         if self.args.fusion_mode == "concat":
             self.task_dense_lin = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
@@ -705,10 +702,23 @@ class NERModel(nn.Module):
 
         # self.num_labels = config.num_labels
         # self.num_labels = 9
-        self.num_labels = 7
+        self.num_labels = args.num_labels
         self.dense = nn.Linear(self.config.hidden_size, self.config.hidden_size)
         self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
         self.out_proj = nn.Linear(self.config.hidden_size, self.num_labels)
+
+    @staticmethod
+    def loss_fn(logits, target):
+        lfn = torch.nn.CrossEntropyLoss()
+
+        # Filter representative tokens
+        active_logits = logits.view(-1, logits.shape[-1])
+        active_target = target.view(-1)
+
+        # Calculate loss
+        loss = lfn(active_logits, active_target)
+
+        return loss
 
     def forward(
         self,
@@ -723,46 +733,36 @@ class NERModel(nn.Module):
         start_id=None,
     ):
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
-        if self.fac_adapter is not None:
-            fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
-        if self.ner_adapter is not None:
-            ner_adapter_outputs, _ = self.ner_adapter(pretrained_model_outputs)
-        if self.lin_adapter is not None:
-            lin_adapter_outputs, _ = self.lin_adapter(pretrained_model_outputs)
+        # if self.fac_adapter is not None:
+        fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
+        # if self.ner_adapter is not None:
+        #     ner_adapter_outputs, _ = self.ner_adapter(pretrained_model_outputs)
+        # if self.lin_adapter is not None:
+        #     lin_adapter_outputs, _ = self.lin_adapter(pretrained_model_outputs)
         if self.args.fusion_mode == "add":
             task_features = pretrained_model_last_hidden_states
             if self.fac_adapter is not None:
                 task_features = task_features + fac_adapter_outputs
-            if self.ner_adapter is not None:
-                task_features = task_features + ner_adapter_outputs
-            if self.lin_adapter is not None:
-                task_features = task_features + lin_adapter_outputs
+            # if self.ner_adapter is not None:
+            #     task_features = task_features + ner_adapter_outputs
+            # if self.lin_adapter is not None:
+            #     task_features = task_features + lin_adapter_outputs
         elif self.args.fusion_mode == "concat":
             combine_features = pretrained_model_last_hidden_states
-            fac_features = self.task_dense_fac(torch.cat([combine_features, fac_adapter_outputs], dim=2))
-            lin_features = self.task_dense_lin(torch.cat([combine_features, lin_adapter_outputs], dim=2))
-            task_features = self.task_dense(torch.cat([fac_features, lin_features], dim=2))
+            # if self.fac_adapter is not None and self.lin_adapter is not None:
+            #     fac_features = self.task_dense_fac(torch.cat([combine_features, fac_adapter_outputs], dim=2))
+            #     lin_features = self.task_dense_lin(torch.cat([combine_features, lin_adapter_outputs], dim=2))
+            #     task_features = self.task_dense(torch.cat([fac_features, lin_features], dim=2))
+            # elif self.fac_adapter is not None:
+            task_features = self.task_dense_fac(torch.cat([combine_features, fac_adapter_outputs], dim=2))
 
         logits = self.out_proj(self.dropout(self.dense(task_features)))
 
         outputs = (logits,) + pretrained_model_outputs[2:]
         if labels is not None:
 
-            def loss_fn(logits, target):
-                lfn = torch.nn.CrossEntropyLoss()
-
-                # Filter representative tokens
-                active_logits = logits.view(-1, logits.shape[-1])
-                active_target = target.view(-1)
-
-                # Calculate loss
-                loss = lfn(active_logits, active_target)
-
-                return loss
-
             # loss_fct = CrossEntropyLoss()
-            loss_fct = loss_fn
-            loss = loss_fct(logits, labels)
+            loss = self.loss_fn(logits, labels)
             outputs = (loss,) + outputs
 
         return outputs  # (loss), logits, (hidden_states), (attentions)
@@ -844,7 +844,7 @@ class FinetuneKAdapterArgs(object):
         self.learning_rate = 5e-5
         self.warmup_steps = 100
         self.save_steps = 1e8
-        self.eval_steps = 50
+        self.eval_steps = 1000
         self.adapter_size = 768
         self.adapter_list = "0,11,22"
         self.adapter_skip_layers = 0
@@ -965,7 +965,7 @@ def main(special_args=None):
     )
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
 
-    parser.add_argument("--logging_steps", type=int, default=10, help="Log every X updates steps.")
+    parser.add_argument("--logging_steps", type=int, default=100, help="Log every X updates steps.")
     parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every X updates steps.")
     parser.add_argument("--eval_steps", type=int, default=None, help="eval every X updates steps.")
     parser.add_argument(
@@ -1108,7 +1108,7 @@ def main(special_args=None):
     processor = processors[args.task_name]()
     args.output_mode = output_modes[args.task_name]
     label_list = processor.get_labels()
-    num_labels = len(label_list)
+    args.num_labels = len(label_list)
 
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
