@@ -243,7 +243,7 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
                     # Save model if it has improved
                     if prev_eval_loss > results["loss"]:
                         prev_eval_loss = results["loss"]
-                        save_model(args, "best-model", adapter_model, optimizer, scheduler)
+                        save_model(args, global_step, adapter_model, optimizer, scheduler, suffix="best-model")
 
                     # Add to writer
                     for key, value in results.items():
@@ -523,10 +523,17 @@ class AdapterModel(nn.Module):
         logger.info("Saving model checkpoint to %s", save_directory)
 
 
-def save_model(args, global_step, adapter_model, optimizer, scheduler):
-    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+def save_model(args, global_step, adapter_model, optimizer, scheduler, suffix=None):
+    # Output dir
+    if suffix is not None:
+        output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(suffix))
+    else:
+        output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    # Save artifacts
     model_to_save = (
         adapter_model.module if hasattr(adapter_model, "module") else adapter_model
     )  # Take care of distributed/parallel training

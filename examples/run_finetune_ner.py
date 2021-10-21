@@ -97,8 +97,8 @@ def train(args, train_dataset, model, tokenizer):
     pretrained_model = model[0]
     ner_model = model[1]
 
-    # if args.local_rank in [-1, 0]:
-    # tb_writer = SummaryWriter(log_dir="runs/" + args.my_model_name)
+    if args.local_rank in [-1, 0]:
+        tb_writer = SummaryWriter(log_dir="runs/" + args.my_model_name)
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
@@ -237,6 +237,7 @@ def train(args, train_dataset, model, tokenizer):
 
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
+    prev_eval_loss = 1e8
     # model.zero_grad()
     pretrained_model.zero_grad()
     ner_model.zero_grad()
@@ -311,10 +312,12 @@ def train(args, train_dataset, model, tokenizer):
                     # Save model if it has improved
                     if prev_eval_loss > results["loss"]:
                         prev_eval_loss = results["loss"]
-                        save_model(args, "best-model", ner_model, pretrained_model)
+                        save_model(args, global_step, ner_model, pretrained_model, suffix="best-model")
 
                     # Add to writer
                     for key, value in results.items():
+                        if isinstance(value, np.ndarray):
+                            value = value.mean()
                         tb_writer.add_scalar("eval_{}".format(key), value, global_step)
 
             if args.max_steps > 0 and global_step > args.max_steps:
@@ -325,6 +328,8 @@ def train(args, train_dataset, model, tokenizer):
                 results = evaluate(args, model, tokenizer, prefix="")
 
                 for key, value in results.items():
+                    if isinstance(value, np.ndarray):
+                        value = value.mean()
                     tb_writer.add_scalar("eval_{}".format(key), value, global_step)
                 break
 
@@ -336,17 +341,13 @@ def train(args, train_dataset, model, tokenizer):
             results = evaluate(args, model, tokenizer, prefix="")
 
             for key, value in results.items():
+                if isinstance(value, np.ndarray):
+                    value = value.mean()
                 tb_writer.add_scalar("eval_{}".format(key), value, global_step)
             break
-        # model = (pretrained_model, ner_model)
-        # logger.info("***** evaluating *****")
 
-        # results = evaluate(args, model, tokenizer, prefix="")
-        # for key, value in results.items():
-        #     tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
-    #
-    # if args.local_rank in [-1, 0]:
-    #     tb_writer.close()
+    if args.local_rank in [-1, 0]:
+        tb_writer.close()
 
     return global_step, tr_loss / global_step
 
@@ -423,29 +424,34 @@ def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
                     all_preds.extend(preds)
                     all_targets.extend(targets)
 
-                eval_loss = eval_loss / nb_eval_steps
-                accuracy = accuracy_score(all_targets, all_preds)
-                precision_scores = precision_score(all_targets, all_preds, average=None)
-                recall_scores = recall_score(all_targets, all_preds, average=None)
-                f1_scores = f1_score(all_targets, all_preds, average=None)
+            eval_loss = eval_loss / nb_eval_steps
+            accuracy = accuracy_score(all_targets, all_preds)
+            precision_scores = precision_score(all_targets, all_preds, average=None)
+            recall_scores = recall_score(all_targets, all_preds, average=None)
+            f1_scores = f1_score(all_targets, all_preds, average=None)
 
-                # logger.info("Label map:{}".format(label_map))
-                if args.logging_steps > 0 and nb_eval_steps % args.logging_steps == 0:
-                    logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
-                    logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
-                    logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
-                    logger.info("{} accuracy:{}".format(dataset_type, accuracy))
+            # logger.info("Label map:{}".format(label_map))
+            if args.logging_steps > 0 and nb_eval_steps % args.logging_steps == 0:
+                logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
+                logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
+                logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
+                logger.info("{} accuracy:{}".format(dataset_type, accuracy))
 
-                result = {"f1": f1_scores, "prec": precision_scores, "recall": recall_scores, "acc": accuracy}
+            results = {
+                "f1": f1_scores,
+                "prec": precision_scores,
+                "recall": recall_scores,
+                "acc": accuracy,
+                "loss": eval_loss,
+            }
 
-                results[dataset_type] = result
-                save_result = str(results)
+            save_result = str(results)
 
-                save_results.append(save_result)
-                result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
-                for line in save_results:
-                    result_file.write(str(dataset_type) + ":" + str(line) + "\n")
-                result_file.close()
+            save_results.append(save_result)
+            result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
+            for line in save_results:
+                result_file.write(str(dataset_type) + ":" + str(line) + "\n")
+            result_file.close()
     return results
 
 
@@ -781,10 +787,17 @@ class NERModel(nn.Module):
         logger.info("Saving model checkpoint to %s", save_directory)
 
 
-def save_model(args, global_step, ner_model, pretrained_model):
-    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+def save_model(args, global_step, ner_model, pretrained_model, suffix=None):
+    # Output dir
+    if suffix is not None:
+        output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(suffix))
+    else:
+        output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+
+    # Save artifacts
     model_to_save = (
         ner_model.module if hasattr(ner_model, "module") else ner_model
     )  # Take care of distributed/parallel training
@@ -795,7 +808,7 @@ def save_model(args, global_step, ner_model, pretrained_model):
     model_to_save.save_pretrained(output_dir)
     torch.save(args, os.path.join(output_dir, "training_args.bin"))
 
-    torch.save(global_step, os.path.join(args.output_dir, "global_step.bin"))
+    torch.save(global_step, os.path.join(output_dir, "global_step.bin"))
     logger.info("Saving model checkpoint to %s", output_dir)
 
 
@@ -830,19 +843,19 @@ class FinetuneKAdapterArgs(object):
         self.model_name_or_path = "roberta-large"
         self.data_dir = "./data/ner_data/finetuning"
         self.output_dir = "ner_output"
-        self.restore = True
+        self.restore = False
         self.do_train = True
         self.do_eval = True
         self.evaluate_during_training = True
         self.task_name = "ner"
         self.comment = "fac-adapter"
-        self.per_gpu_train_batch_size = 32
-        self.per_gpu_eval_batch_size = 64
+        self.per_gpu_train_batch_size = 50
+        self.per_gpu_eval_batch_size = 128
         self.num_train_epochs = 4
         self.max_seq_lengt = 64
         self.gradient_accumulation_steps = 1
         self.learning_rate = 5e-5
-        self.warmup_steps = 100
+        self.warmup_steps = 1000
         self.save_steps = 1e8
         self.eval_steps = 1000
         self.adapter_size = 768
