@@ -1,0 +1,51 @@
+,input,label
+0,"('i love machine learning','superman')",0
+1,"('umbrella','car')",0
+2,"('jesus','medicine')",0
+3,"('stomia product','computer')",0
+4,"('medication','acetaminophen')",1
+5,"('asthma','lungs')",1
+6,"('surgery','hospital')",1
+7,"('aortic valve','heart')",1
+8,"('cardiologist','heart')",1
+9,"('ct scan','tennis')",0
+10,"('radiography','movie theater')",0
+11,"('ergonomy','stand up desk')",1
+12,"('counseling','drug addiction')",1
+13,"('parkinson','disease')",1
+14,"('stroke rehabilitation','physiotherapy')",1
+15,"('speech therapist','speech-language pathology')",1
+16,"('speech therapist','profession')",1
+17,"('hydrotherapy','treatment')",1
+18,"('spinal manipulation','service')",1
+19,"('nitrous oxyde sedation','anesthesia')",1
+20,"('duodenal switch','bariatric medicine')",1
+21,"('gastric bypass','intestine')",1
+22,"('table','biology')",0
+23,"('vaccine','calculator')",0
+24,"('poetry','bandage')",0
+25,"('chiropractor','gopro')",0
+26,"('keys','burn care')",0
+27,"('burn care','tissue transplantation')",1
+28,"('familiprix','brand')",1
+29,"('jean coutu','brand')",1
+30,"('stiches','rubix cube')",0
+31,"('surgiacl procedure','skin grafting')",1
+32,"('ophtalmologist','eye')",1
+33,"('cancer','disease')",1
+34,"('artecoll','dermatology')",1
+35,"('cryosurgery','service')",1
+36,"('lipoma removal','dermatologist')",1
+37,"('varicose veins treatment','blood')",0
+38,"('cecostomy','psychology')",0
+39,"('hepatology','specialty')",1
+40,"('hiv','aladeen')",0
+41,"('infectiologist','zoo')",0
+42,"('psychiatry','pyramid')",0
+43,"('tuberculosis','banana')",0
+44,"('posture','personal protective equipment')",0
+45,"('sainte justine','hospital')",1
+46,"('hpv test','laboratory')",1
+47,"('nephrology','kidney biopsy')",1
+48,"('chemotherapy','sum 41')",0
+49,"('mammography','radiology')",1
