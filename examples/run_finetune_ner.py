@@ -430,12 +430,11 @@ def evaluate(args, model, tokenizer, dataset_type: str = "dev", prefix=""):
             recall_scores = recall_score(all_targets, all_preds, average=None)
             f1_scores = f1_score(all_targets, all_preds, average=None)
 
-            # logger.info("Label map:{}".format(label_map))
-            if args.logging_steps > 0 and nb_eval_steps % args.logging_steps == 0:
-                logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
-                logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
-                logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
-                logger.info("{} accuracy:{}".format(dataset_type, accuracy))
+            # Display eval metrics
+            logger.info("{} micro f1 scores:{}".format(dataset_type, f1_scores))
+            logger.info("{} recall scores :{}".format(dataset_type, recall_scores))
+            logger.info("{} precision scores:{}".format(dataset_type, precision_scores))
+            logger.info("{} accuracy:{}".format(dataset_type, accuracy))
 
             results = {
                 "f1": f1_scores,
@@ -569,7 +568,7 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self, args):
         super(PretrainedModel, self).__init__()
-        self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        self.model = RobertaModel.from_pretrained(args.model_name, output_hidden_states=True)
         self.config = self.model.config
         self.config.freeze_adapter = args.freeze_adapter
         if args.freeze_bert:
@@ -704,7 +703,33 @@ class NERModel(nn.Module):
         if self.args.fusion_mode == "concat":
             self.task_dense_lin = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
             self.task_dense_fac = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
-            self.task_dense = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
+            self.task_dense = nn.Linear(self.config.hidden_size, self.config.hidden_size)
+
+        ### Another Bert Layer
+        class AdapterConfig:
+            project_hidden_size: int = self.config.hidden_size
+            hidden_act: str = "gelu"
+            adapter_size: int = 768
+            adapter_initializer_range: float = 0.0002
+            is_decoder: bool = False
+            attention_probs_dropout_prob: float = 0.1
+            hidden_dropout_prob: float = 0.1
+            hidden_size: int = 768
+            initializer_range: float = 0.02
+            intermediate_size: int = 3072
+            layer_norm_eps: float = 1e-05
+            max_position_embeddings: int = 514
+            num_attention_heads: int = 12
+            num_hidden_layers: int = 2
+            num_labels: int = 2
+            output_attentions: bool = False
+            output_hidden_states: bool = False
+            torchscript: bool = False
+            type_vocab_size: int = 1
+            vocab_size: int = 50265
+
+        self.adapter_config = AdapterConfig
+        self.encoder = BertEncoder(self.adapter_config)
 
         # self.num_labels = config.num_labels
         # self.num_labels = 9
@@ -762,7 +787,20 @@ class NERModel(nn.Module):
             # elif self.fac_adapter is not None:
             task_features = self.task_dense_fac(torch.cat([combine_features, fac_adapter_outputs], dim=2))
 
-        logits = self.out_proj(self.dropout(self.dense(task_features)))
+        # Pass to BERT layer
+        input_shape = task_features.size()[:-1]
+        attention_mask = torch.ones(input_shape, device=self.args.device)
+        if attention_mask.dim() == 3:
+            extended_attention_mask = attention_mask[:, None, :, :]
+        if attention_mask.dim() == 2:
+            extended_attention_mask = attention_mask[:, None, None, :]
+        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        head_mask = [None] * self.adapter_config.num_hidden_layers
+        encoder_outputs = self.encoder(task_features, attention_mask=extended_attention_mask, head_mask=head_mask)
+
+        logits = self.out_proj(self.dropout(self.dense(encoder_outputs[0])))
 
         outputs = (logits,) + pretrained_model_outputs[2:]
         if labels is not None:
@@ -839,8 +877,8 @@ class FinetuneKAdapterArgs(object):
     def __init__(self) -> None:
 
         self.model_type = "roberta"
-        self.model_name = "roberta-large"
-        self.model_name_or_path = "roberta-large"
+        self.model_name = "roberta-base"
+        self.model_name_or_path = "roberta-base"
         self.data_dir = "./data/ner_data/finetuning"
         self.output_dir = "ner_output"
         self.restore = False
@@ -848,25 +886,26 @@ class FinetuneKAdapterArgs(object):
         self.do_eval = True
         self.evaluate_during_training = True
         self.task_name = "ner"
-        self.comment = "fac-adapter"
-        self.per_gpu_train_batch_size = 50
-        self.per_gpu_eval_batch_size = 128
+        self.comment = "fac-adapter-plus"
+        self.per_gpu_train_batch_size = 600
+        self.per_gpu_eval_batch_size = 900
         self.num_train_epochs = 4
         self.max_seq_lengt = 64
         self.gradient_accumulation_steps = 1
-        self.learning_rate = 5e-5
-        self.warmup_steps = 1000
+        self.learning_rate = 5e-4
+        self.warmup_steps = 50
         self.save_steps = 1e8
-        self.eval_steps = 1000
+        self.eval_steps = 100
         self.adapter_size = 768
-        self.adapter_list = "0,11,22"
+        self.adapter_list = "0,6,11"
         self.adapter_skip_layers = 0
         self.adapter_transformer_layers = 2
         self.meta_adapter_model = ""
-        self.max_seq_length = 256
+        self.max_seq_length = 64
         self.no_cuda = False
         self.fusion_mode = "concat"  # "add"
-        self.meta_fac_adaptermodel = "output_data/custom_maxlen-256_batch-32_lr-5e-05_warmup-1200_epoch-8_fac-adapter/checkpoint-best-model/pytorch_model.bin"
+        self.meta_fac_adaptermodel = "output_data/custom_maxlen-64_batch-256_lr-0.0005_warmup-15_epoch-25_fac-adapter/checkpoint-best-model/pytorch_model.bin"  # "output_data/custom_maxlen-256_batch-32_lr-5e-05_warmup-1200_epoch-8_fac-adapter/checkpoint-best-model/pytorch_model.bin"
+        self.freeze_adapter = True
 
 
 def main(special_args=None):
@@ -1051,6 +1090,7 @@ def main(special_args=None):
         args.no_cuda = special_args.no_cuda
         args.fusion_mode = special_args.fusion_mode
         args.meta_fac_adaptermodel = special_args.meta_fac_adaptermodel
+        args.freeze_adapter = special_args.freeze_adapter
 
     args.adapter_list = args.adapter_list.split(",")
     args.adapter_list = [int(i) for i in args.adapter_list]
@@ -1133,7 +1173,7 @@ def main(special_args=None):
     # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     # model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
 
-    tokenizer = RobertaTokenizerFast.from_pretrained("roberta-large", add_prefix_space=True)
+    tokenizer = RobertaTokenizerFast.from_pretrained(args.model_name, add_prefix_space=True)
     pretrained_model = PretrainedModel(args)
     if args.meta_fac_adaptermodel:
         fac_adapter = AdapterModel(args, pretrained_model.config)
@@ -1215,23 +1255,30 @@ def main(special_args=None):
     # # Evaluation
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
-        tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-        checkpoint = os.path.join(args.output_dir, "checkpoint-best-model")
-        model = model_class.from_pretrained(checkpoint)
-        model.to(args.device)
+        pretrained_model = model[0]
+        ner_model = model[1]
+        # tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        tokenizer = RobertaTokenizerFast.from_pretrained(args.model_name, add_prefix_space=True)
+        output_dir = os.path.join(args.output_dir, "checkpoint-best-model")
+        if hasattr(ner_model, "module"):
+            ner_model.module.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
+        else:  # Take care of distributed/parallel training
+            ner_model.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_model.bin")))
+
+        if hasattr(pretrained_model, "module"):
+            pretrained_model.module.load_state_dict(
+                torch.load(os.path.join(output_dir, "pytorch_pretrained_model.bin"))
+            )
+        else:  # Take care of distributed/parallel training
+            pretrained_model.load_state_dict(torch.load(os.path.join(output_dir, "pytorch_pretrained_model.bin")))
+        # model = model_class.from_pretrained(checkpoint)
+
+        pretrained_model.to(args.device)
+        ner_model.to(args.device)
+
+        model = (pretrained_model, ner_model)
+
         result = evaluate(args, model, tokenizer, dataset_type="test", prefix="best-model")
-        logger.info("micro f1:{}".format(result))
-        result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
-        results.update(result)
-    save_result = str(results)
-    save_results.append(save_result)
-
-    result_file = open(os.path.join(args.output_dir, args.my_model_name + "_result.txt"), "w")
-    for line in save_results:
-        result_file.write(str(line) + "\n")
-    result_file.close()
-
-    # return results
 
 
 if __name__ == "__main__":

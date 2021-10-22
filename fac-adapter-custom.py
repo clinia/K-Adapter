@@ -384,9 +384,9 @@ class Adapter(nn.Module):
 
 
 class PretrainedModel(nn.Module):
-    def __init__(self):
+    def __init__(self, name):
         super(PretrainedModel, self).__init__()
-        self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        self.model = RobertaModel.from_pretrained(name, output_hidden_states=True)
         self.config = self.model.config
         for p in self.parameters():
             p.requires_grad = False
@@ -625,8 +625,8 @@ class KAdapterArgs(object):
     def __init__(self) -> None:
 
         self.model_type = "roberta"
-        self.model_name = "roberta-large"
-        self.model_name_or_path = "roberta-large"
+        self.model_name = "roberta-base"
+        self.model_name_or_path = "roberta-base"
         self.data_dir = "./data/graph_data/rc_data"
         self.output_dir = "output_data"
         self.restore = True
@@ -635,21 +635,21 @@ class KAdapterArgs(object):
         self.evaluate_during_training = True
         self.task_name = "custom"
         self.comment = "fac-adapter"
-        self.per_gpu_train_batch_size = 32
-        self.per_gpu_eval_batch_size = 64
-        self.num_train_epochs = 8
+        self.per_gpu_train_batch_size = 256
+        self.per_gpu_eval_batch_size = 1000
+        self.num_train_epochs = 25
         self.max_seq_lengt = 64
         self.gradient_accumulation_steps = 1
-        self.learning_rate = 5e-5
-        self.warmup_steps = 100
+        self.learning_rate = 5e-4
+        self.warmup_steps = 15
         self.save_steps = 1e8
-        self.eval_steps = 50
+        self.eval_steps = 10
         self.adapter_size = 768
-        self.adapter_list = "0,11,22"
+        self.adapter_list = "0,6,11"
         self.adapter_skip_layers = 0
         self.adapter_transformer_layers = 2
         self.meta_adapter_model = ""
-        self.max_seq_length = 256
+        self.max_seq_length = 64
         self.no_cuda = False
 
 
@@ -875,8 +875,8 @@ def main(special_args=None):
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    tokenizer = RobertaTokenizer.from_pretrained("roberta-large")
-    pretrained_model = PretrainedModel()
+    tokenizer = RobertaTokenizer.from_pretrained(args.model_name)
+    pretrained_model = PretrainedModel(args.model_name)
     adapter_model = AdapterModel(args, pretrained_model.config, num_labels)
 
     if args.meta_adapter_model:
