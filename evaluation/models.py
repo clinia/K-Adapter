@@ -50,7 +50,7 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self, args):
         super(PretrainedModel, self).__init__()
-        self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        self.model = RobertaModel.from_pretrained(args.model_name, output_hidden_states=True)
         self.config = self.model.config
         self.config.freeze_adapter = args.freeze_adapter
         if args.freeze_bert:
@@ -178,7 +178,7 @@ class NERModel(nn.Module):
         class AdapterConfig:
             project_hidden_size: int = self.config.hidden_size
             hidden_act: str = "gelu"
-            adapter_size: int = self.adapter_size  # 64
+            adapter_size: int = 768
             adapter_initializer_range: float = 0.0002
             is_decoder: bool = False
             attention_probs_dropout_prob: float = 0.1
@@ -280,7 +280,7 @@ class NERModel(nn.Module):
             loss = self.loss_fn(logits, labels)
             outputs = (loss,) + outputs
 
-        return outputs, task_features, concat_features  # (loss), logits, (hidden_states), (attentions) = outputs
+        return outputs, task_features, fac_adapter_outputs  # (loss), logits, (hidden_states), (attentions) = outputs
 
 
 def load_pretrained_adapter(adapter, adapter_path):

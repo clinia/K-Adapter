@@ -1,15 +1,24 @@
-import os
 import sys
+import json
 import logging
+import os
+import time
 import argparse
 import random
+from io import DEFAULT_BUFFER_SIZE
+from typing import Dict, Generator, List, Union
 
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
 from transformers import RobertaTokenizerFast
-
+import tensorboard as tb
+import yaml
+from genericpath import exists
+from tensorboard import program
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
@@ -17,9 +26,6 @@ sys.path.append(rootPath)
 
 from evaluation.models import PretrainedModel, NERModel, AdapterModel, load_pretrained_adapter
 from examples.utils_glue import convert_examples_to_features_ner, output_modes, processors
-
-from search_utils.embeddings_eval.base import EvaluateEmbeddings
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,124 +38,274 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-class EvalNEREmbeddings(EvaluateEmbeddings):
-
+class VisualizeEmbeddings:
     """
-    NOTE: this is single-usage script, it is not currently configured in any pipeline or stage.
+    A class that allows 3D visualization of embeddings via Tensorboard Projector. Visualization can be accomplished in two ways. First by passing a pre-computed dictionary of embeddings in the following format
+    {id:{text: str(), embedding:list()}} to the create_checkpoint method followed by the visualize method. The second option makes use of the import_dict method, which automatically checks for a cached version
+    of the desired embeddings or computes them if they don't exist. The second option should be called via the main() method.
     """
 
-    def evaluate(self, model, tokenizer, no_cuda: bool = False, mode: str = "sum") -> pd.DataFrame:
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        seq_len,
+        device,
+        embedding_src,
+        LOG_DIR_BASE: str,
+        DEFAULT_BUS_PATH: str,
+        DEFAULT_ONT_PATH: str,
+        batch_size: int = 32,
+    ) -> None:
+        self.model = model
+        self.tokenizer = tokenizer
+        self.seq_len = seq_len
+        self.embedding_src = embedding_src
+        self.LOG_DIR_BASE = LOG_DIR_BASE
+        self.DEFAULT_BUS_PATH = DEFAULT_BUS_PATH
+        self.DEFAULT_ONT_PATH = DEFAULT_ONT_PATH
+        self.batch_size = batch_size
+        self.device = device
+
+        # Abbreviation dict
+        self.facets = {"ser": "service", "prd": "product", "prf": "profession", "spc": "specialty", "res": "resource"}
+
+        # Load logger
+        self.logger = logging.getLogger(__name__)
+
+    def view(
+        self,
+        label: Union[str, List[str]],
+        model: str,
+        mode: str,
+        lang: str,
+        force_recompute: bool = False,
+        launch_server: bool = True,
+    ) -> None:
+        """
+        Main logic to execute when creating visualizations in Tensorboard. This implementation supports the creation of views
+        containing multiple sources of embeddings (ie. ONT + BUS).
+        """
+        if mode not in ("cls", "sum", "mean"):
+            raise ValueError("mode parameter must be 'sum' or 'mode'.")
+
+        log_dir = "{}/{}/{}".format(self.LOG_DIR_BASE, lang, model)
+        name = "{}_{}_embedding".format(mode, "_".join(label) if isinstance(label, list) else label)
+
+        label = label if isinstance(label, list) else [label]
+        label.sort()  # Ensure same color for labels and  cache filename
+
+        # Collect embeddings
+        embeddings_dict_list = []
+        for l in label:
+            embeddings_dict_list.append(self.import_dict(log_dir, l.lower(), model, mode, lang, force=force_recompute))
+
+        # Add labels if multiple dicts
+        for d, l in zip(embeddings_dict_list, label):
+            for key in d:
+                d[key]["label"] = l.upper()
+
+        # Join dictionaries
+        embeddings_dict = {}
+        for d in embeddings_dict_list:
+            embeddings_dict = {**embeddings_dict, **d}
+
+        self.create_checkpoint(embedding_dict=embeddings_dict, log_dir=log_dir, name=name)
+
+        if launch_server:
+            self.serve(log_dir)
+
+    def serve(self, tracking_address) -> None:
+        """Launches the Tensorboard server endpoint at http://localhost:6006/"""
+        tb = program.TensorBoard()
+        tb.configure(argv=[None, "--logdir", tracking_address])
+        url = tb.launch()
+        while True:
+            time.sleep(5)
+
+    def create_checkpoint(self, embedding_dict: dict, log_dir: str, name: str) -> None:
+        """Extracts informations form the input dictionary and creates a checkpoint readable by Tensorboard"""
+
+        # Extract embeddings and tags (label and title)
+        text = list(embedding_dict.keys())
+        values = list(embedding_dict.values())
+        vectors = np.array([item["embedding"] for item in values])
+        labels = [item["label"] for item in values]
+        metadata = list(zip(text, labels))
+
+        # Create a Tensorboard event
+        writer = SummaryWriter(log_dir="{}/{}".format(log_dir, name))
+        writer.add_embedding(vectors, metadata, metadata_header=["title", "label"])
+        writer.close()
+
+    def import_dict(self, log_dir: str, label: str, model: str, mode: str, lang: str, force: bool) -> Dict:
+        """Imports the desired embedding dict or computes the embedding by calling the appropriate model"""
+
+        root_path = "{}/embeddings".format(log_dir)
+        path = "{}/{}_{}_embedding_cache.json".format(root_path, mode, label)
+
+        if os.path.isfile(path) and not force:
+
+            self.logger.info("Loading embeddings from cache...")
+            with open(path, "r") as f:
+                embeddings = json.load(f)
+
+            # Filtering duplicates
+            embedding_dict = dict()
+            for id, info in embeddings.items():
+                if info not in embedding_dict.values():
+                    embedding_dict[id] = info
+        else:
+            t1 = time.time()
+            self.logger.info("No cache found! Computing embeddings...")
+            embedding_dict = self.compute_embeddings(label, mode=mode, lang=lang)
+
+            self.logger.info("Computation took: {}".format(time.time() - t1))
+
+            os.makedirs(root_path, exist_ok=True)
+
+            # Save computed embeddings
+            with open(path, "w") as f:
+                json.dump(embedding_dict, f)
+
+        return embedding_dict
+
+    def compute_embeddings(self, label: str, mode: str, lang: str) -> Dict:
+        """Creates the embeddings by calling the model and processing the outputs according to the selected mode"""
+        mean_embeddings = True if mode == "mean" else False
+
+        ## Load and prepare data
+        if label in {"ser", "prd", "prf", "spc", "res"}:
+            data = self._import_facet(DEFAULT_ONT_PATH=self.DEFAULT_ONT_PATH, label=label, lang=lang)
+
+        if label == "ont":
+            data = []
+            keys = list(self.facets.keys())
+            keys.remove("res")
+            for facet in keys:
+                data.extend(self._import_facet(DEFAULT_ONT_PATH=self.DEFAULT_ONT_PATH, label=facet, lang=lang))
+        if label == "bus":
+            data = self._import_business(PATH="{}/{}/documents.json".format(os.getcwd(), self.DEFAULT_BUS_PATH))
 
         # send model to device
-        device = torch.device("cuda" if torch.cuda.is_available() and not no_cuda else "cpu")
-        if torch.cuda.device_count() > 1:
-            print("{} GPUs are available. Let's use them.".format(torch.cuda.device_count()))
-            model = nn.DataParallel(model)
-
-        pretrained_model, ner_model = model
-        pretrained_model = pretrained_model.to(device)
-        ner_model = ner_model.to(device)
+        pretrained_model, ner_model = self.model
+        pretrained_model = pretrained_model.to(self.device)
+        ner_model = ner_model.to(self.device)
 
         pretrained_model.eval()
         ner_model.eval()
         model = (pretrained_model, ner_model)
-        # Start evaluation loop
+        # Send to NER
         with torch.no_grad():
+            embeddings = list()
+            for titles_batch in tqdm(self._batch(data, self.batch_size), total=len(data) // self.batch_size):
+                pretrained_model = model[0]
+                ner_model = model[1]
 
-            pos_couple_means = []
-            neg_couple_means = []
-            sim_vector = []
-            for i, (
-                inputs,
-                labels,
-            ) in enumerate(self.dataloader):
+                tokenization = self.tokenizer(
+                    text=list(titles_batch),
+                    add_special_tokens=True,
+                    max_length=self.seq_len,
+                    truncation="longest_first",
+                    padding="max_length",
+                    return_tensors="pt",
+                    return_token_type_ids=True,
+                    return_attention_mask=True,
+                )
+                ## Separate embeddings
+                # Remove special token indexes from token_tyoe_ids
 
-                embd1, embd2 = self._forward(model, inputs, labels, tokenizer, device, mode)
+                input_ids = tokenization["input_ids"].to(self.device)
+                attention_mask = tokenization["attention_mask"].to(self.device)
+                token_type_ids = tokenization["token_type_ids"].to(self.device)
+                token_type_ids = torch.ones_like(token_type_ids).to(
+                    self.device
+                )  # They use ones as their ids for single sequences
+                token_type_ids = torch.where(
+                    (
+                        (input_ids == self.tokenizer.bos_token_id)
+                        | (input_ids == self.tokenizer.pad_token_id)
+                        | (input_ids == self.tokenizer.eos_token_id)
+                    ),
+                    0,
+                    token_type_ids,
+                )
 
-                # Handle case where batch size is one
-                if len(embd1.shape) != 2:
-                    embd1 = embd1.unsqueeze(0)
-                    embd2 = embd2.unsqueeze(0)
+                pretrained_model_outputs = pretrained_model(input_ids, attention_mask=attention_mask)
+                outputs = ner_model(pretrained_model_outputs, input_ids=input_ids, labels=None)
 
-                similarity = self.cos(embd1, embd2)
+                if self.embedding_src == "sum":
+                    token_embeddings = outputs[1]
+                if self.embedding_src == "concat":
+                    token_embeddings = outputs[2]
+                emb1 = token_embeddings[token_type_ids == 1, :]
+                n_sub_tokens = torch.sum(token_type_ids, dim=1)  # Nb of tokens to sum together for each entity
 
-                sim_vector.extend(list(similarity.detach().cpu().numpy()))
+                ent_emb_i = []
+                for n in n_sub_tokens:
+                    divider = n if mean_embeddings else 1
+                    tmp = emb1[: int(n)].sum(0)  # get tokens
+                    tmp = tmp / divider
+                    emb1 = emb1[int(n) :]  # remove from tensor to process sequentially the entities in the batch
+                    ent_emb_i.append(tmp)
 
-                positive = similarity[labels == 1]
-                negative = 1 - similarity[labels == 0]
+                embeddings.extend(torch.stack(ent_emb_i))
 
-                batch_pos_mean = torch.mean(positive)
-                batch_neg_mean = torch.mean(negative)
+        # Process embeddings
+        # embeddings = self._get_embeddings(outputs, mode=mode, mean_embeddings=mean_embeddings)
 
-                pos_couple_means.append(batch_pos_mean.detach().cpu().numpy())
-                neg_couple_means.append(batch_neg_mean.detach().cpu().numpy())
+        # Build dict
+        embeddings_dict = dict()
+        for title, embedding in zip(data, embeddings):
+            embeddings_dict[title] = {"label": label.upper(), "embedding": embedding.tolist()}
 
-            pos_mean = sum(pos_couple_means) / len(pos_couple_means)
-            neg_mean = sum(neg_couple_means) / len(neg_couple_means)
+        return embeddings_dict
 
-            print("Mean similarity for positive examples : ", pos_mean)
-            print("Mean inverse similarity for negative examples : ", neg_mean)
-            print("Total mean similarity is : ", (pos_mean + neg_mean) / 2)
+    def _import_facet(self, DEFAULT_ONT_PATH: str, label: str, lang: str) -> List:
+        """Returns the concepts as a dictionary with the id as the key and the value as the name in the correct language."""
+        path = "{}/{}/{}/name.csv".format(os.getcwd(), DEFAULT_ONT_PATH, self.facets[label])
 
-        self.dataset.dataset["similarity_score"] = pd.Series(sim_vector)
-        return self.dataset.dataset
+        facet = pd.read_csv(path, names=["name"])
+        facet = list(set(facet.name.to_list()))
+        return facet
 
-    def _forward(self, model, inputs, labels, tokenizer, device, mode):
+    @staticmethod
+    def _import_business(PATH: str) -> List:
+        """Returns the businesses as a dictionary with the id as the key and the value as the name in the correct language."""
+        with open(PATH, "r") as f:
+            business_dict = json.load(f)
 
-        pretrained_model = model[0]
-        ner_model = model[1]
+        bus_names = [bus["identifiers"]["standard"][0] for bus in business_dict]
+        bus_names = list(set(bus_names))
+        return bus_names
 
-        ent_emb = []
-        for i in range(2):
+    @staticmethod
+    def _batch(iterable, batch_size=1) -> Generator:
+        """Helper tool to batch elements to be passed onto the model"""
+        l = len(iterable)
+        for ndx in range(0, l, batch_size):
+            yield iterable[ndx : min(ndx + batch_size, l)]
 
-            tokenization = tokenizer(
-                text=list(inputs[i]),
-                add_special_tokens=True,
-                max_length=self.seq_len,
-                truncation="longest_first",
-                padding="max_length",
-                return_tensors="pt",
-                return_token_type_ids=True,
-                return_attention_mask=True,
-            )
-            ## Separate embeddings
-            # Remove special token indexes from token_tyoe_ids
+    def _get_embeddings(self, responses: List, mode: str, mean_embeddings: bool = False) -> List:
+        """Gather the embeddings from the model's response according to the selected mode"""
+        if mode == "cls":
+            embeddings_list = [response["cls_embedding"] for response in responses]
+        elif mode == "sum" or mode == "mean":
+            embeddings_list = [
+                self._create_sum_embeddings([term["embedding"] for term in response["terms"]], mean_embeddings)
+                for response in responses
+            ]
+        return embeddings_list
 
-            input_ids = tokenization["input_ids"].to(device)
-            attention_mask = tokenization["attention_mask"].to(device)
-            token_type_ids = tokenization["token_type_ids"].to(device)
-            token_type_ids = torch.ones_like(token_type_ids).to(
-                device
-            )  # They use ones as their ids for single sequences
-            token_type_ids = torch.where(
-                (
-                    (input_ids == tokenizer.bos_token_id)
-                    | (input_ids == tokenizer.pad_token_id)
-                    | (input_ids == tokenizer.eos_token_id)
-                ),
-                0,
-                token_type_ids,
-            )
+    @staticmethod
+    def _create_sum_embeddings(embeddings_lst: List, mean_embeddings: bool = False) -> List:
+        """Processes a list of embeddings into a sum and the averages if enabled"""
+        n = len(embeddings_lst)
 
-            pretrained_model_outputs = pretrained_model(input_ids, attention_mask=attention_mask)
-            outputs = ner_model(pretrained_model_outputs, input_ids=input_ids, labels=None)
-
-            if mode == "sum":
-                token_embeddings = outputs[1]
-            if mode == "concat":
-                token_embeddings = outputs[2]
-            emb1 = token_embeddings[token_type_ids == 1, :]
-            n_sub_tokens = torch.sum(token_type_ids, dim=1)  # Nb of tokens to sum together for each entity
-
-            ent_emb_i = []
-            for n in n_sub_tokens:
-                tmp = emb1[: int(n)].sum(0)  # get tokens
-                emb1 = emb1[int(n) :]  # remove from tensor to process sequentially the entities in the batch
-                ent_emb_i.append(tmp)
-
-            ent_emb.append(torch.stack(ent_emb_i))
-
-        return ent_emb[0], ent_emb[1]
+        embeddings = np.sum(np.array(embeddings_lst), 0)
+        if mean_embeddings and n != 0:
+            embeddings = embeddings / n
+        return list(embeddings)
 
 
 class FinetuneKAdapterArgs(object):
@@ -492,12 +648,29 @@ def main(special_args=None):
     # model.to(args.device)
     model = (pretrained_model, ner_model)
 
-    evaluator = EvalNEREmbeddings(DATA_PATH="evaluation/data/datav2.csv", batch_size=10, seq_len=64)
+    # Initialize logger
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-    results = evaluator.evaluate(model, tokenizer=tokenizer, no_cuda=args.no_cuda, mode=args.embd_type)
+    LOG_DIR_BASE = "tensorboard/results"
+    DEFAULT_ONT_PATH = "tensorboard/data/facets"
+    DEFAULT_BUS_PATH = "model/input_data/tensorboard"
 
-    EXPORT_PATH = ""
-    evaluator.export(results, EXPORT_PATH)
+    visio = VisualizeEmbeddings(
+        model,
+        tokenizer,
+        embedding_src="concat",
+        seq_len=args.max_seq_length,
+        LOG_DIR_BASE=LOG_DIR_BASE,
+        DEFAULT_BUS_PATH=DEFAULT_BUS_PATH,
+        DEFAULT_ONT_PATH=DEFAULT_ONT_PATH,
+        device=args.device,
+    )
+
+    visio.view(label=["ser", "prd", "prf", "spc", "res"], model="roberta", mode="sum", lang="en", force_recompute=True)
 
 
 if __name__ == "__main__":
