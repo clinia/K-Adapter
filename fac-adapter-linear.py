@@ -191,7 +191,13 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
                 "labels": batch[3],
             }
             pretrained_model_outputs = pretrained_model(**inputs)
-            outputs = adapter_model(pretrained_model_outputs, **inputs)
+            outputs = adapter_model(
+                pretrained_model_outputs,
+                **inputs,
+                pad_token_id=tokenizer.pad_token_id,
+                bos_token_id=tokenizer.bos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
 
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
 
@@ -293,12 +299,16 @@ def evaluate(args, val_dataset, model, tokenizer):
             }
 
             pretrained_model_outputs = pretrained_model(**inputs)
-            outputs = adapter_model(pretrained_model_outputs, **inputs)
+            outputs = adapter_model(
+                pretrained_model_outputs,
+                **inputs,
+                pad_token_id=tokenizer.pad_token_id,
+                bos_token_id=tokenizer.bos_token_id,
+                eos_token_id=tokenizer.eos_token_id,
+            )
 
-            tmp_eval_loss, logits = outputs[:2]
-            preds = logits.argmax(dim=1)
-            prediction += preds.tolist()
-            gold_result += inputs["labels"].tolist()
+            tmp_eval_loss = outputs[0]
+
             eval_loss += tmp_eval_loss.mean().item()
         nb_eval_steps += 1
         logger.info(
@@ -307,14 +317,7 @@ def evaluate(args, val_dataset, model, tokenizer):
             )
         )
 
-    micro_F1 = f1_score(y_true=gold_result, y_pred=prediction, average="micro")
-    macro_F1 = f1_score(y_true=gold_result, y_pred=prediction, average="macro")
-
-    logger.info("The micro_f1 on dev dataset: %f", micro_F1)
-    logger.info("The macro_f1 on dev dataset: %f", macro_F1)
-    results["micro_F1"] = micro_F1
-    results["macro_F1"] = macro_F1
-    results["loss"] = eval_loss
+    results["loss"] = eval_loss / len(val_dataloader)
     output_eval_file = os.path.join(args.output_dir, args.my_model_name + "_eval_results.txt")
     with open(output_eval_file, "w") as writer:
         logger.info("***** Eval results  *****")
@@ -454,9 +457,12 @@ class AdapterModel(nn.Module):
         self.adapter = nn.ModuleList([Adapter(args, AdapterConfig) for _ in range(self.adapter_num)])
 
         # self.com_dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
-        self.dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
-        self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
-        self.out_proj = nn.Linear(self.config.hidden_size, self.num_labels)
+        # self.dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
+        # self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
+        # self.out_proj = nn.Linear(self.config.hidden_size, self.num_labels)
+
+        # self.loss_fn = nn.CosineSimilarity(dim=1, eps=1e-8)
+        self.loss_fn = MSELoss(reduction="none")
 
     def forward(
         self,
@@ -467,8 +473,9 @@ class AdapterModel(nn.Module):
         position_ids=None,
         head_mask=None,
         labels=None,
-        subj_special_start_id=None,
-        obj_special_start_id=None,
+        pad_token_id=None,
+        bos_token_id=None,
+        eos_token_id=None,
     ):
 
         outputs = pretrained_model_outputs
@@ -493,20 +500,51 @@ class AdapterModel(nn.Module):
                     )
 
         ##### drop below parameters when doing downstream tasks
-        logits = self.out_proj(
-            self.dropout(self.dense(torch.cat((sequence_output[:, 0, :], hidden_states_last[:, 0, :]), dim=1)))
+        batch_size, seq_len = input_ids.shape
+
+        token_type_ids = torch.ones_like(input_ids).to(
+            self.args.device
+        )  # They use ones as their ids for single sequences
+        token_type_ids = torch.where(
+            ((input_ids == bos_token_id) | (input_ids == pad_token_id) | (input_ids == eos_token_id)),
+            0,
+            token_type_ids,
         )
 
-        outputs = (logits,) + outputs[2:]
-        if labels is not None:
-            if self.num_labels == 1:
-                #  We are doing regression
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.view(-1), labels.view(-1))
-            else:
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            outputs = (loss,) + outputs
+        separators = (input_ids == 2).nonzero()[:, 1].reshape(batch_size, -1)
+        first_sep = separators[:, 0]
+        second_sep = separators[:, 1]
+
+        mask_a = (
+            torch.arange(start=0, end=64).unsqueeze(0).repeat(batch_size, 1).to(self.args.device)
+            < first_sep.unsqueeze(1)
+        ).to(self.args.device)
+        mask_b = (
+            torch.arange(start=0, end=64).unsqueeze(0).repeat(batch_size, 1).to(self.args.device)
+            > second_sep.unsqueeze(1)
+        ).to(self.args.device)
+
+        index_a = token_type_ids * mask_a
+        index_b = token_type_ids * mask_b
+
+        emb_a = hidden_states_last.clone()
+        del hidden_states_last
+        emb_b = emb_a.clone()
+
+        emb_a[index_a == 0] = 0
+        emb_b[index_b == 0] = 0
+
+        divider_a = (seq_len - (emb_a == 0).sum(1)[:, 0]).to(self.args.device)
+        divider_b = (seq_len - (emb_b == 0).sum(1)[:, 0]).to(self.args.device)
+
+        if self.args.emb_type == "mean":
+            emb_a = emb_a / divider_a
+            emb_b = emb_b / divider_b
+
+        loss = self.loss_fn(emb_a.sum(1), emb_b.sum(1)).mean(1)
+        loss[labels == self.args.negative_sample_id] = -1 * loss[labels == self.args.negative_sample_id]
+        loss = loss.mean()
+        outputs = (loss,) + outputs[2:]
         return outputs  # (loss), logits, (hidden_states), (attentions)
 
     def save_pretrained(self, save_directory):
@@ -634,15 +672,15 @@ class KAdapterArgs(object):
         self.do_eval = True
         self.evaluate_during_training = True
         self.task_name = "custom"
-        self.comment = "fac-adapter-last-lin"
-        self.per_gpu_train_batch_size = 200
-        self.per_gpu_eval_batch_size = 1000
+        self.comment = "fac-mse-last-reduced-linear"
+        self.per_gpu_train_batch_size = 200  # 256
+        self.per_gpu_eval_batch_size = 256  # 1000
         self.num_train_epochs = 25
         self.max_seq_lengt = 64
         self.gradient_accumulation_steps = 1
         self.learning_rate = 5e-4
         self.warmup_steps = 15
-        self.save_steps = 1e8
+        self.save_steps = 100
         self.eval_steps = 10
         self.adapter_size = 768
         self.adapter_list = "11"
@@ -651,6 +689,8 @@ class KAdapterArgs(object):
         self.meta_adapter_model = ""
         self.max_seq_length = 64
         self.no_cuda = False
+        self.emb_type = "sum"
+        self.negative_sample = 2239
 
 
 def main(special_args=None):
@@ -798,6 +838,8 @@ def main(special_args=None):
         args.meta_adapter_model = special_args.meta_adapter_model
         args.max_seq_length = special_args.max_seq_length
         args.no_cuda = special_args.no_cuda
+        args.emb_type = special_args.emb_type
+        args.negative_sample = special_args.negative_sample
 
     args.adapter_list = args.adapter_list.split(",")
     args.adapter_list = [int(i) for i in args.adapter_list]
@@ -869,6 +911,8 @@ def main(special_args=None):
     processor = processors[args.task_name]()
     args.output_mode = output_modes[args.task_name]
     label_list = processor.get_labels()
+    label_map = {label: i for i, label in enumerate(label_list)}
+    args.negative_sample_id = label_map["disjoint with"]
     num_labels = len(label_list)
 
     # Load pretrained model and tokenizer

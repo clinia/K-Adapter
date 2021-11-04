@@ -492,7 +492,7 @@ def main(special_args=None):
     # model.to(args.device)
     model = (pretrained_model, ner_model)
 
-    evaluator = EvalNEREmbeddings(DATA_PATH="evaluation/data/datav2.csv", batch_size=10, seq_len=64)
+    evaluator = EvalNEREmbeddings(DATA_PATH="evaluation/data/datav2eval.csv", batch_size=10, seq_len=64)
 
     results = evaluator.evaluate(model, tokenizer=tokenizer, no_cuda=args.no_cuda, mode=args.embd_type)
 

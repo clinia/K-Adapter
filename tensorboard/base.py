@@ -68,7 +68,14 @@ class VisualizeEmbeddings:
         self.device = device
 
         # Abbreviation dict
-        self.facets = {"ser": "service", "prd": "product", "prf": "profession", "spc": "specialty", "res": "resource"}
+        self.facets = {
+            "ser": "service",
+            "prd": "product",
+            "prf": "profession",
+            "spc": "specialty",
+            "res": "resource",
+            "all": "all",
+        }
 
         # Load logger
         self.logger = logging.getLogger(__name__)
@@ -175,7 +182,7 @@ class VisualizeEmbeddings:
         mean_embeddings = True if mode == "mean" else False
 
         ## Load and prepare data
-        if label in {"ser", "prd", "prf", "spc", "res"}:
+        if label in {"ser", "prd", "prf", "spc", "res", "all"}:
             data = self._import_facet(DEFAULT_ONT_PATH=self.DEFAULT_ONT_PATH, label=label, lang=lang)
 
         if label == "ont":
@@ -321,7 +328,7 @@ class FinetuneKAdapterArgs(object):
         self.do_eval = True
         self.evaluate_during_training = True
         self.task_name = "ner"
-        self.comment = "fac-adapter"
+        self.comment = "fac-mse-last"
         self.per_gpu_train_batch_size = 50
         self.per_gpu_eval_batch_size = 128
         self.num_train_epochs = 4
@@ -332,14 +339,14 @@ class FinetuneKAdapterArgs(object):
         self.save_steps = 1e8
         self.eval_steps = 1000
         self.adapter_size = 768
-        self.adapter_list = "0,6,11"
+        self.adapter_list = "11"
         self.adapter_skip_layers = 0
-        self.adapter_transformer_layers = 2
+        self.adapter_transformer_layers = 6
         self.meta_adapter_model = ""
         self.max_seq_length = 64
         self.no_cuda = False
         self.fusion_mode = "concat"  # "add"
-        self.meta_fac_adaptermodel = "ner_output/ner_batch-600_lr-0.0005_warmup-50_epoch-4_fac-adapter-plus/checkpoint-best-model/pytorch_model.bin"
+        self.meta_fac_adaptermodel = "output_data/custom_maxlen-64_batch-200_lr-0.0005_warmup-15_epoch-25_fac-mse-last-reduced-linear/checkpoint-best-model/pytorch_model.bin"  # "ner_output/ner_batch-600_lr-0.0005_warmup-50_epoch-4_fac-adapter-plus/checkpoint-best-model/pytorch_model.bin"
         self.embd_type = "concat"
 
 
@@ -670,7 +677,7 @@ def main(special_args=None):
         device=args.device,
     )
 
-    visio.view(label=["ser", "prd", "prf", "spc", "res"], model="roberta", mode="sum", lang="en", force_recompute=True)
+    visio.view(label="all", model="roberta-mse-linear", mode="sum", lang="en", force_recompute=True)
 
 
 if __name__ == "__main__":

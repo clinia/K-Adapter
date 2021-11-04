@@ -35,7 +35,7 @@ class Adapter(nn.Module):
         head_mask = [None] * self.adapter_config.num_hidden_layers
         encoder_outputs = self.encoder(down_projected, attention_mask=extended_attention_mask, head_mask=head_mask)
         up_projected = self.up_project(encoder_outputs[0])
-        return hidden_states + up_projected
+        return up_projected
 
     def init_weights(self):
         for m in self.modules():
