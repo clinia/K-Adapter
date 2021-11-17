@@ -34,6 +34,10 @@ requests = "^2.26.0"
 tensorboardX = "^2.4"
 ipykernel = "^6.4.1"
 search-utils = {git = "https://github.com/clinia/search-utils.git", branch="main"}
+pyrdf2vec = "^0.2.3"
+rdflib = "^6.0.2"
+aiohttp = "^3.8.1"
+python-louvain = "^0.15"
 
 
 [tool.poetry.dev-dependencies]

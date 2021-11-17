@@ -346,7 +346,7 @@ class FinetuneKAdapterArgs(object):
         self.max_seq_length = 64
         self.no_cuda = False
         self.fusion_mode = "concat"  # "add"
-        self.meta_fac_adaptermodel = "output_data/custom_maxlen-64_batch-200_lr-0.0005_warmup-15_epoch-25_fac-mse-last-reduced-linear/checkpoint-best-model/pytorch_model.bin"  # "ner_output/ner_batch-600_lr-0.0005_warmup-50_epoch-4_fac-adapter-plus/checkpoint-best-model/pytorch_model.bin"
+        self.meta_fac_adaptermodel = "output_data/regression_maxlen-64_batch-200_lr-0.0005_warmup-35_epoch-600_fac-mse-last-reduced-linear/pytorch_model.bin"  # "ner_output/ner_batch-600_lr-0.0005_warmup-50_epoch-4_fac-adapter-plus/checkpoint-best-model/pytorch_model.bin"
         self.embd_type = "concat"
 
 
@@ -677,7 +677,9 @@ def main(special_args=None):
         device=args.device,
     )
 
-    visio.view(label="all", model="roberta-mse-linear", mode="sum", lang="en", force_recompute=True)
+    visio.view(
+        label="all", model="roberta-regression", mode="sum", lang="en", force_recompute=True, launch_server=False
+    )
 
 
 if __name__ == "__main__":

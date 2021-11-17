@@ -15,3 +15,5 @@
 evaluation/data/*
 tensorboard/data/*
 tensorboard/results/*
+rdflib/*
+pyRDF_outputs/*

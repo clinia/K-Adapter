@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import re
 from io import open
 
 import numpy as np
@@ -861,6 +862,126 @@ def convert_examples_to_features(
     return features
 
 
+class RegressionProcessor(DataProcessor):
+    def __init__(self):
+        self.word_mappings = self._read_json("data/graph_data/regression_data/taxonomy_mappings.json")
+        self.embeddings_mapping = self._read_json("data/graph_data/regression_data/embedding_dict.json")
+
+    def get_train_examples(self, data_dir, dataset_type, negative_sample):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample
+        )
+
+    def get_dev_examples(self, data_dir, dataset_type, negative_sample):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "{}.json".format(dataset_type))), dataset_type, negative_sample
+        )
+
+    def get_labels(self):
+        """See base class."""
+        # return ["0", "1"]
+        return []
+
+    def _create_examples(self, lines, dataset_type, negative_sample):
+        """Creates examples for the training and dev sets."""
+        no_relation_number = negative_sample
+        entities = set()
+        for subject, relations in lines.items():
+            # text_a: tokenized words
+            entities.add(subject)
+            # text_b: other information
+            for predicate, obj in relations["relations"]:
+                if predicate != "disjoint with":
+                    entities.add(obj)
+
+        guid = 0
+        examples = []
+        for entity in entities:
+            # uri = self.word_mappings.get(entity, None)
+            kg_base_uri = "https://kg.clinia.com/"
+            uri = kg_base_uri + re.sub("\s+", "_", entity)
+            embedding = self.embeddings_mapping.get(uri, None)
+            if embedding is not None:
+                guid += 1
+                examples.append(InputExample(guid=guid, text_a=entity, text_b="", label=embedding))
+            else:
+                print(entity)
+        return examples
+
+
+def convert_examples_to_features_regression(
+    examples,
+    max_seq_length,
+    tokenizer,
+    output_mode,
+    cls_token_at_end=False,
+    cls_token="[CLS]",
+    cls_token_segment_id=1,
+    sep_token="[SEP]",
+    sep_token_extra=False,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    sequence_a_segment_id=0,
+    sequence_b_segment_id=1,
+    mask_padding_with_zero=True,
+):
+    """Loads a data file into a list of `InputBatch`s
+    `cls_token_at_end` define the location of the CLS token:
+        - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
+        - True (XLNet/GPT pattern): A + [SEP] + B + [SEP] + [CLS]
+    `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
+    """
+
+    features = []
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 10000 == 0:
+            logger.info("Writing example %d of %d" % (ex_index, len(examples)))
+
+        text_a = example.text_a
+
+        if isinstance(tokenizer, RobertaTokenizer):
+            tokenized = tokenizer(text_a, max_length=max_seq_length, padding="max_length")
+
+        input_ids = tokenized["input_ids"]
+        input_mask = tokenized["attention_mask"]
+
+        if "segment_ids" in tokenized.keys():
+            segment_ids = tokenized["segment_ids"]
+        else:
+            segment_ids = [sequence_a_segment_id] * len(input_ids)
+
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+
+        if output_mode == "regression":
+            label_id = example.label
+        else:
+            raise KeyError(output_mode)
+
+        if ex_index < 5:
+            logger.info("*** Example ***")
+            logger.info("guid: %s" % (example.guid))
+            # logger.info("tokens: %s" % " ".join([str(x) for x in tokens]))
+            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            logger.info("label: {}".format(label_id))
+
+        features.append(
+            custom_rcInputFeatures(
+                input_ids=input_ids,
+                input_mask=input_mask,
+                segment_ids=segment_ids,
+                label_id=label_id,
+            )
+        )
+    return features
+
+
 def convert_examples_to_features_trex(
     examples,
     label_list,
@@ -1049,10 +1170,12 @@ processors = {
     "trex_entity_typing": TREXProcessor_et,
     "find_head": FindHeadProcessor,
     "mlm": MLMProcessor,
+    "regression": RegressionProcessor,
 }
 
 output_modes = {
     "custom": "classification",
+    "regression": "regression",
     "trex": "classification",
     "trex_entity_typing": "classification",
     "find_head": "classification",
